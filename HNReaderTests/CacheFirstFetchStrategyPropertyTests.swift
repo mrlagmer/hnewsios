@@ -10,6 +10,16 @@ import XCTest
 class CacheFirstFetchStrategyPropertyTests: XCTestCase {
     
     private let cache = CacheManager.shared
+
+    override func tearDown() {
+        super.tearDown()
+
+        Task {
+            await cache.clearStories()
+            await cache.clearCurrentPage()
+            await cache.clearScrollPosition()
+        }
+    }
     
     /// Property 23: Cache-First Fetch Strategy
     /// For any comment fetch operation, the cache manager SHALL check local storage before making network requests.
@@ -126,5 +136,51 @@ class CacheFirstFetchStrategyPropertyTests: XCTestCase {
         let secondFetch = await cache.getComment(id: testId)
         XCTAssertNotNil(secondFetch)
         XCTAssertEqual(secondFetch?.text, "Now cached")
+    }
+
+    /// Verify that the story feed snapshot can be restored without a network fetch
+    func testCacheFirstForPersistedStories() async {
+        let stories = [
+            Story(
+                id: 88001,
+                title: "Cached Story",
+                score: 42,
+                descendants: 7,
+                url: "https://example.com/story",
+                by: "tester",
+                time: Int(Date().timeIntervalSince1970),
+                kids: [99001],
+                topComment: Comment(
+                    id: 99001,
+                    text: "Cached top comment",
+                    by: "commenter",
+                    time: Int(Date().timeIntervalSince1970),
+                    kids: nil,
+                    parent: 88001,
+                    deleted: nil,
+                    dead: nil
+                ),
+                socialImageURL: URL(string: "https://example.com/image.png"),
+                allComments: nil
+            )
+        ]
+
+        try? await cache.saveStories(stories)
+
+        let cachedStories = await cache.getStories()
+
+        XCTAssertEqual(cachedStories?.count, 1)
+        XCTAssertEqual(cachedStories?.first?.id, 88001)
+        XCTAssertEqual(cachedStories?.first?.topComment?.text, "Cached top comment")
+        XCTAssertEqual(cachedStories?.first?.socialImageURL?.absoluteString, "https://example.com/image.png")
+    }
+
+    /// Verify that page zero is treated as a saved state rather than "missing"
+    func testCurrentPageZeroPersistsAsSavedState() async {
+        await cache.saveCurrentPage(0)
+
+        let savedPage = await cache.getCurrentPage()
+
+        XCTAssertEqual(savedPage, 0)
     }
 }

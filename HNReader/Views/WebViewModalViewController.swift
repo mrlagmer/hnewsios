@@ -10,11 +10,15 @@ final class WebViewModalViewController: UIViewController {
 
     // UI
     private let topBar = UIView()
+    private let titleContainerView = UIView()
     private let titleLabel = UILabel()
     private let backButton = UIButton(type: .system)
     private let shareButton = UIButton(type: .system)
     private let safariButton = UIButton(type: .system)
     private let closeButton = UIButton(type: .system)
+    private let loadingContainerView = UIView()
+    private let loadingIndicator = UIActivityIndicatorView(style: .large)
+    private let loadingLabel = UILabel()
 
     // Optional preloaded web view passed in
     private let preloadedWebView: WKWebView?
@@ -50,12 +54,17 @@ final class WebViewModalViewController: UIViewController {
             topBar.heightAnchor.constraint(equalToConstant: 56)
         ])
 
+        titleContainerView.translatesAutoresizingMaskIntoConstraints = false
+        titleContainerView.clipsToBounds = true
+
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = AppTheme.Typography.metadata
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textAlignment = .center
         titleLabel.textColor = AppTheme.Colors.secondaryText
         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         titleLabel.text = URL(string: urlString)?.host ?? "Reader"
 
         configureToolbarButton(backButton, symbolName: "chevron.left", accessibilityLabel: "Go back")
@@ -81,9 +90,12 @@ final class WebViewModalViewController: UIViewController {
         trailingStack.axis = .horizontal
         trailingStack.alignment = .center
         trailingStack.spacing = AppTheme.Metrics.small
+        leadingStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        trailingStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        topBar.addSubview(titleLabel)
+        titleContainerView.addSubview(titleLabel)
         topBar.addSubview(leadingStack)
+        topBar.addSubview(titleContainerView)
         topBar.addSubview(trailingStack)
         NSLayoutConstraint.activate([
             leadingStack.leadingAnchor.constraint(equalTo: topBar.leadingAnchor, constant: AppTheme.Metrics.medium),
@@ -92,10 +104,17 @@ final class WebViewModalViewController: UIViewController {
             trailingStack.trailingAnchor.constraint(equalTo: topBar.trailingAnchor, constant: -AppTheme.Metrics.medium),
             trailingStack.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
 
-            titleLabel.centerXAnchor.constraint(equalTo: topBar.centerXAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingStack.trailingAnchor, constant: AppTheme.Metrics.medium),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingStack.leadingAnchor, constant: -AppTheme.Metrics.medium)
+            titleContainerView.leadingAnchor.constraint(greaterThanOrEqualTo: leadingStack.trailingAnchor, constant: AppTheme.Metrics.medium),
+            titleContainerView.trailingAnchor.constraint(lessThanOrEqualTo: trailingStack.leadingAnchor, constant: -AppTheme.Metrics.medium),
+            titleContainerView.centerXAnchor.constraint(equalTo: topBar.centerXAnchor),
+            titleContainerView.centerYAnchor.constraint(equalTo: topBar.centerYAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: titleContainerView.leadingAnchor),
+            titleLabel.trailingAnchor.constraint(equalTo: titleContainerView.trailingAnchor),
+            titleLabel.topAnchor.constraint(equalTo: titleContainerView.topAnchor),
+            titleLabel.bottomAnchor.constraint(equalTo: titleContainerView.bottomAnchor),
+            titleLabel.centerXAnchor.constraint(equalTo: titleContainerView.centerXAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: titleContainerView.centerYAnchor)
         ])
     }
 
@@ -130,7 +149,61 @@ final class WebViewModalViewController: UIViewController {
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
+        setupLoadingView()
+        syncLoadingState()
+
         updateBackButtonState()
+    }
+
+    private func setupLoadingView() {
+        loadingContainerView.translatesAutoresizingMaskIntoConstraints = false
+        loadingContainerView.backgroundColor = AppTheme.Colors.background.withAlphaComponent(0.96)
+
+        loadingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        loadingIndicator.color = AppTheme.Colors.tint
+        loadingIndicator.hidesWhenStopped = true
+        loadingIndicator.accessibilityLabel = "Loading article"
+
+        loadingLabel.translatesAutoresizingMaskIntoConstraints = false
+        loadingLabel.text = "Loading article…"
+        loadingLabel.font = AppTheme.Typography.metadata
+        loadingLabel.adjustsFontForContentSizeCategory = true
+        loadingLabel.textAlignment = .center
+        loadingLabel.textColor = AppTheme.Colors.secondaryText
+
+        let loadingStack = UIStackView(arrangedSubviews: [loadingIndicator, loadingLabel])
+        loadingStack.translatesAutoresizingMaskIntoConstraints = false
+        loadingStack.axis = .vertical
+        loadingStack.alignment = .center
+        loadingStack.spacing = AppTheme.Metrics.medium
+
+        loadingContainerView.addSubview(loadingStack)
+        view.addSubview(loadingContainerView)
+
+        NSLayoutConstraint.activate([
+            loadingContainerView.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            loadingContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loadingContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            loadingContainerView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            loadingStack.centerXAnchor.constraint(equalTo: loadingContainerView.centerXAnchor),
+            loadingStack.centerYAnchor.constraint(equalTo: loadingContainerView.centerYAnchor)
+        ])
+    }
+
+    private func syncLoadingState() {
+        let hasLoadedPage = webView.url != nil && !webView.isLoading && webView.estimatedProgress >= 1.0
+        setLoadingVisible(!hasLoadedPage)
+    }
+
+    private func setLoadingVisible(_ visible: Bool) {
+        loadingContainerView.isHidden = !visible
+
+        if visible {
+            loadingIndicator.startAnimating()
+        } else {
+            loadingIndicator.stopAnimating()
+        }
     }
 
     private func setupSwipeBackGesture() {
@@ -174,7 +247,23 @@ final class WebViewModalViewController: UIViewController {
 
 // MARK: - WKNavigationDelegate
 extension WebViewModalViewController: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        setLoadingVisible(true)
+        updateBackButtonState()
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        setLoadingVisible(false)
+        updateBackButtonState()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        setLoadingVisible(false)
+        updateBackButtonState()
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        setLoadingVisible(false)
         updateBackButtonState()
     }
 }

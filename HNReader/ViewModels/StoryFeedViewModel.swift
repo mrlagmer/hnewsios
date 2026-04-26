@@ -43,6 +43,11 @@ class StoryFeedViewModel: ObservableObject {
     func loadInitialStories() async {
         isLoading = true
         errorMessage = nil
+
+        if await restoreStoriesFromCache() {
+            isLoading = false
+            return
+        }
         
         do {
             // Try to fetch top story IDs from network
@@ -54,15 +59,13 @@ class StoryFeedViewModel: ObservableObject {
             isLoading = false
         } catch {
             // Try to restore from cache
-            guard let savedPage = await cache.getCurrentPage() else {
+            guard await restoreStoriesFromCache() else {
                 isLoading = false
                 errorMessage = "Failed to load stories"
                 print("❌ Error loading initial stories (no cache): \(error)")
                 return
             }
             
-            // Cache fallback: restore saved state
-            await restoreState()
             errorMessage = "Using cached data"
             print("⚠️ Network error, using cached data: \(error)")
             isLoading = false
@@ -93,8 +96,8 @@ class StoryFeedViewModel: ObservableObject {
             offlineMode = false
             
             // Clear saved state
-            await cache.saveScrollPosition(0)
-            await cache.saveCurrentPage(0)
+            await cache.clearScrollPosition()
+            await cache.clearCurrentPage()
             
             // Fetch fresh top story IDs
             topStoryIDs = try await api.fetchTopStoryIDs()
@@ -112,62 +115,87 @@ class StoryFeedViewModel: ObservableObject {
     
     /// Downloads all stories and comments for offline mode
     func downloadForOffline() async {
-        isDownloadingOffline = true
-        downloadProgress = (0, stories.count)
-        errorMessage = nil
-        
-        let batchSize = 3
-        let delayBetweenBatches: UInt64 = 500_000_000  // 500ms in nanoseconds
-        
-        do {
-            for (index, story) in stories.enumerated() {
-                // Fetch all comments for this story
-                // Note: fetchComments respects maxCommentDepth, but we fetch all top-level comments
-                let comments = try await api.fetchComments(ids: story.kids ?? [], depth: 0)
-                
-                // Save comments to cache
-                try await cache.saveStoryComments(storyId: story.id, comments: comments)
-                
-                // Update progress
-                downloadProgress = (index + 1, stories.count)
-                
-                // Add delay between batches
-                if (index + 1) % batchSize == 0 && index + 1 < stories.count {
-                    try await Task.sleep(nanoseconds: delayBetweenBatches)
-                }
-            }
-            
-            // Preload all story URLs
-            let urls = stories.compactMap { $0.url }
-            if !urls.isEmpty {
-                preloader.preloadMany(urls: urls)
-            }
-            
-            // Enable offline mode
-            offlineMode = true
-            isDownloadingOffline = false
-        } catch {
-            isDownloadingOffline = false
-            errorMessage = "Failed to download for offline"
-            print("❌ Error downloading for offline: \(error)")
+        guard !isDownloadingOffline else { return }
+
+        let articleURLs = stories.compactMap(\.url)
+        let totalUnits = stories.count + articleURLs.count
+
+        guard totalUnits > 0 else {
+            downloadProgress = (0, 0)
+            offlineMode = false
+            return
         }
+
+        isDownloadingOffline = true
+        offlineMode = false
+        downloadProgress = (0, totalUnits)
+        errorMessage = nil
+
+        try? await cache.saveStories(stories)
+
+        var completedUnits = 0
+        var successfulUnits = 0
+
+        for story in stories {
+            do {
+                let comments = try await api.fetchComments(ids: story.kids ?? [], depth: 0)
+                try await cache.saveStoryComments(storyId: story.id, comments: comments)
+                successfulUnits += 1
+            } catch {
+                print("❌ Error caching comments for story \(story.id): \(error)")
+            }
+
+            completedUnits += 1
+            downloadProgress = (completedUnits, totalUnits)
+        }
+
+        for url in articleURLs {
+            let didPreload = await preloader.preloadForOffline(url: url)
+            if didPreload {
+                successfulUnits += 1
+            } else {
+                print("❌ Error preloading article for offline use: \(url)")
+            }
+
+            completedUnits += 1
+            downloadProgress = (completedUnits, totalUnits)
+        }
+
+        isDownloadingOffline = false
+
+        if successfulUnits == 0 {
+            offlineMode = false
+            errorMessage = "Failed to download for offline"
+            return
+        }
+
+        offlineMode = true
+        errorMessage = successfulUnits == totalUnits ? nil : "Some items could not be saved offline"
+    }
+
+    func dismissOfflineReadyState() {
+        guard !isDownloadingOffline else { return }
+
+        offlineMode = false
+        downloadProgress = (0, 0)
     }
     
     /// Restores the app state from cache
     func restoreState() async {
-        let savedPage = await cache.getCurrentPage() ?? 0
-        
-        // Load stories up to saved page
-        for page in 0...savedPage {
-            await loadPage(page)
+        isLoading = true
+
+        if await restoreStoriesFromCache() {
+            isLoading = false
+            return
         }
-        
-        currentPage = savedPage
+
+        isLoading = false
     }
 
     /// Saves the current page state to cache (called from background notification)
     func saveCurrentPageState() async {
         await cache.saveCurrentPage(currentPage)
+        try? await cache.saveStories(stories)
     }
     
     // MARK: - Private Methods
@@ -193,6 +221,19 @@ class StoryFeedViewModel: ObservableObject {
         
         // Append to stories array
         stories.append(contentsOf: pageStories)
+
+        try? await cache.saveStories(stories)
+        await cache.saveCurrentPage(page)
+    }
+
+    private func restoreStoriesFromCache() async -> Bool {
+        guard let cachedStories = await cache.getStories(), !cachedStories.isEmpty else {
+            return false
+        }
+
+        stories = cachedStories
+        currentPage = await cache.getCurrentPage() ?? max((cachedStories.count - 1) / pageSize, 0)
+        return true
     }
     
     /// Fetches story metadata including top comment and social image

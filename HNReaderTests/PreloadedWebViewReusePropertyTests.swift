@@ -60,6 +60,19 @@ class PreloadedWebViewReusePropertyTests: XCTestCase {
         XCTAssertNotNil(webView, "WebView should be created for non-preloaded URL")
         XCTAssertEqual(preloader.activeURL, testURL, "Active URL should be set")
     }
+
+    /// Test that opening a non-preloaded URL caches the instance for reuse
+    func testNonPreloadedWebViewReuse() {
+        let preloader = WebViewPreloader.shared
+
+        let testURL = "https://example.com/reuse"
+
+        let webView1 = preloader.open(url: testURL)
+        preloader.close()
+        let webView2 = preloader.open(url: testURL)
+
+        XCTAssertTrue(webView1 === webView2, "Opening the same URL again should reuse the cached WebView instance")
+    }
     
     /// Test that multiple preloaded URLs can be accessed
     func testMultiplePreloadedWebViews() {

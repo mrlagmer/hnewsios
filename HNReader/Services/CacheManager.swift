@@ -19,6 +19,7 @@ actor CacheManager {
     // MARK: - Cache Keys
     private let commentPrefix = "hn_comment_"
     private let storyCommentsPrefix = "hn_story_comments_"
+    private let storiesFileName = "hn_stories.json"
     private let scrollPositionKey = "scroll_position"
     private let currentPageKey = "current_page"
     
@@ -148,6 +149,54 @@ actor CacheManager {
             return nil
         }
     }
+
+    // MARK: - Story Feed Caching Methods
+
+    /// Saves the current story feed snapshot
+    func saveStories(_ stories: [Story]) async throws {
+        let fileURL = cacheDirectory.appendingPathComponent(storiesFileName)
+
+        let cacheEntry = StoriesCacheEntry(stories: stories, timestamp: Date().timeIntervalSince1970 * 1000)
+        let data = try await Task.detached(priority: .background) { () -> Data in
+            let encoder = JSONEncoder()
+            return try encoder.encode(cacheEntry)
+        }.value
+
+        try data.write(to: fileURL)
+    }
+
+    /// Retrieves the current story feed snapshot if not expired
+    func getStories() async -> [Story]? {
+        let fileURL = cacheDirectory.appendingPathComponent(storiesFileName)
+
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let cacheEntry = try await Task.detached(priority: .background) { () -> StoriesCacheEntry in
+                let decoder = JSONDecoder()
+                return try decoder.decode(StoriesCacheEntry.self, from: data)
+            }.value
+
+            let currentTime = Date().timeIntervalSince1970 * 1000
+            if currentTime - cacheEntry.timestamp > cacheExpirationInterval * 1000 {
+                try? fileManager.removeItem(at: fileURL)
+                return nil
+            }
+
+            return cacheEntry.stories
+        } catch {
+            return nil
+        }
+    }
+
+    /// Removes the persisted story feed snapshot
+    func clearStories() async {
+        let fileURL = cacheDirectory.appendingPathComponent(storiesFileName)
+        try? fileManager.removeItem(at: fileURL)
+    }
     
     // MARK: - App State Persistence Methods
     
@@ -158,8 +207,17 @@ actor CacheManager {
     
     /// Retrieves scroll position from UserDefaults
     func getScrollPosition() async -> CGFloat? {
+        guard userDefaults.object(forKey: scrollPositionKey) != nil else {
+            return nil
+        }
+
         let value = userDefaults.double(forKey: scrollPositionKey)
-        return value > 0 ? CGFloat(value) : nil
+        return CGFloat(value)
+    }
+
+    /// Clears the saved scroll position
+    func clearScrollPosition() async {
+        userDefaults.removeObject(forKey: scrollPositionKey)
     }
     
     /// Saves current page number to UserDefaults
@@ -169,8 +227,16 @@ actor CacheManager {
     
     /// Retrieves current page number from UserDefaults
     func getCurrentPage() async -> Int? {
-        let value = userDefaults.integer(forKey: currentPageKey)
-        return value > 0 ? value : nil
+        guard userDefaults.object(forKey: currentPageKey) != nil else {
+            return nil
+        }
+
+        return userDefaults.integer(forKey: currentPageKey)
+    }
+
+    /// Clears the saved current page
+    func clearCurrentPage() async {
+        userDefaults.removeObject(forKey: currentPageKey)
     }
     
     // MARK: - Cache Cleanup Methods

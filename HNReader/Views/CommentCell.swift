@@ -5,18 +5,29 @@
 
 import UIKit
 
-class CommentCell: UITableViewCell {
+final class CommentCell: UITableViewCell {
     static let reuseIdentifier = "CommentCell"
 
-    private let containerView = UIView()
-    private let indentView = UIView()
+    private let nodeContainerView = UIView()
+    private let topBorderView = UIView()
+    private let railButton = UIButton(type: .system)
+    private let railView = UIView()
+    private let verticalStack = UIStackView()
+    private let headerRow = UIStackView()
+    private let metaRow = UIStackView()
     private let authorLabel = UILabel()
+    private let opBadgeLabel = UILabel()
+    private let metaDotLabel = UILabel()
     private let timeLabel = UILabel()
+    private let collapseButton = UIButton(type: .system)
     private let commentTextLabel = UILabel()
-    private let collapseIndicator = UIButton(type: .system)
-    private let collapsedLabel = UILabel()
-    private var indentWidthConstraint: NSLayoutConstraint?
-    
+    private let actionRow = UIStackView()
+    private let upvoteButton = UIButton(type: .system)
+    private let replyButton = UIButton(type: .system)
+    private let moreButton = UIButton(type: .system)
+    private let headerTapButton = UIButton(type: .custom)
+
+    private var containerLeadingConstraint: NSLayoutConstraint?
     private var onToggle: (() -> Void)?
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -34,9 +45,10 @@ class CommentCell: UITableViewCell {
         authorLabel.text = nil
         timeLabel.text = nil
         commentTextLabel.attributedText = nil
-        collapsedLabel.text = nil
-        collapsedLabel.isHidden = true
-        collapseIndicator.isHidden = true
+        opBadgeLabel.isHidden = true
+        collapseButton.isHidden = true
+        headerTapButton.isHidden = true
+        railButton.isHidden = true
         onToggle = nil
     }
 
@@ -44,209 +56,249 @@ class CommentCell: UITableViewCell {
         selectionStyle = .none
         backgroundColor = .clear
         contentView.backgroundColor = .clear
+        clipsToBounds = false
+        contentView.clipsToBounds = false
 
-        containerView.translatesAutoresizingMaskIntoConstraints = false
-        containerView.backgroundColor = AppTheme.Colors.elevatedSurface
-        containerView.layer.cornerRadius = 14
-        containerView.layer.cornerCurve = .continuous
-        containerView.layer.borderWidth = 1
-        containerView.layer.borderColor = AppTheme.Colors.border.cgColor
-        contentView.addSubview(containerView)
+        nodeContainerView.translatesAutoresizingMaskIntoConstraints = false
+        nodeContainerView.layer.cornerRadius = 16
+        nodeContainerView.layer.cornerCurve = .continuous
+        nodeContainerView.clipsToBounds = true
+        contentView.addSubview(nodeContainerView)
 
-        // Indent view
-        indentView.translatesAutoresizingMaskIntoConstraints = false
-        indentView.backgroundColor = AppTheme.Colors.rail
-        indentView.layer.cornerRadius = 2
-        containerView.addSubview(indentView)
+        topBorderView.translatesAutoresizingMaskIntoConstraints = false
+        topBorderView.backgroundColor = AppTheme.Colors.border
+        nodeContainerView.addSubview(topBorderView)
 
-        // Author label
+        railButton.translatesAutoresizingMaskIntoConstraints = false
+        railButton.tintColor = .clear
+        railButton.addTarget(self, action: #selector(toggleThread), for: .touchUpInside)
+        contentView.addSubview(railButton)
+
+        railView.translatesAutoresizingMaskIntoConstraints = false
+        railView.layer.cornerRadius = 1
+        railButton.addSubview(railView)
+
+        verticalStack.translatesAutoresizingMaskIntoConstraints = false
+        verticalStack.axis = .vertical
+        verticalStack.spacing = 10
+        nodeContainerView.addSubview(verticalStack)
+
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.spacing = 8
+
+        metaRow.translatesAutoresizingMaskIntoConstraints = false
+        metaRow.axis = .horizontal
+        metaRow.alignment = .center
+        metaRow.spacing = 6
+
         authorLabel.translatesAutoresizingMaskIntoConstraints = false
-        authorLabel.font = AppTheme.Typography.metadata
+        authorLabel.font = AppTheme.Typography.commentMeta
         authorLabel.adjustsFontForContentSizeCategory = true
-        authorLabel.numberOfLines = 1
-        containerView.addSubview(authorLabel)
+        authorLabel.textColor = AppTheme.Colors.primaryText
 
-        // Time label
+        opBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        opBadgeLabel.font = UIFont.systemFont(ofSize: 10, weight: .bold)
+        opBadgeLabel.text = "OP"
+        opBadgeLabel.textColor = AppTheme.Colors.tint
+        opBadgeLabel.backgroundColor = AppTheme.Colors.accentSoft
+        opBadgeLabel.layer.cornerRadius = 4
+        opBadgeLabel.layer.cornerCurve = .continuous
+        opBadgeLabel.textAlignment = .center
+        opBadgeLabel.isHidden = true
+
+        metaDotLabel.translatesAutoresizingMaskIntoConstraints = false
+        metaDotLabel.font = AppTheme.Typography.commentMetaDetail
+        metaDotLabel.text = "·"
+        metaDotLabel.textColor = AppTheme.Colors.tertiaryText
+
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = AppTheme.Typography.detail
+        timeLabel.font = AppTheme.Typography.commentMetaDetail
         timeLabel.adjustsFontForContentSizeCategory = true
-        timeLabel.textColor = AppTheme.Colors.tertiaryText
-        timeLabel.numberOfLines = 1
-        containerView.addSubview(timeLabel)
+        timeLabel.textColor = AppTheme.Colors.secondaryText
 
-        // Collapse indicator button
-        collapseIndicator.translatesAutoresizingMaskIntoConstraints = false
-        collapseIndicator.setImage(UIImage(systemName: "chevron.down"), for: .normal)
-        collapseIndicator.tintColor = AppTheme.Colors.secondaryText
-        collapseIndicator.backgroundColor = AppTheme.Colors.surface
-        collapseIndicator.layer.cornerRadius = AppTheme.Metrics.controlCornerRadius
-        collapseIndicator.layer.cornerCurve = .continuous
-        collapseIndicator.isHidden = true
-        collapseIndicator.accessibilityTraits = .button
-        collapseIndicator.accessibilityLabel = "Toggle thread"
-        containerView.addSubview(collapseIndicator)
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+        collapseButton.titleLabel?.font = AppTheme.Typography.commentMetaDetail
+        collapseButton.setTitleColor(AppTheme.Colors.tint, for: .normal)
+        collapseButton.tintColor = AppTheme.Colors.tint
+        collapseButton.addTarget(self, action: #selector(toggleThread), for: .touchUpInside)
+        collapseButton.isHidden = true
 
-        // Text label
         commentTextLabel.translatesAutoresizingMaskIntoConstraints = false
         commentTextLabel.numberOfLines = 0
-        commentTextLabel.font = AppTheme.Typography.commentPreview
+        commentTextLabel.font = AppTheme.Typography.commentBody
         commentTextLabel.adjustsFontForContentSizeCategory = true
-        containerView.addSubview(commentTextLabel)
+        commentTextLabel.textColor = AppTheme.Colors.primaryText
 
-        // Collapsed label
-        collapsedLabel.translatesAutoresizingMaskIntoConstraints = false
-        collapsedLabel.font = AppTheme.Typography.detail
-        collapsedLabel.adjustsFontForContentSizeCategory = true
-        collapsedLabel.textColor = AppTheme.Colors.secondaryText
-        collapsedLabel.isHidden = true
-        containerView.addSubview(collapsedLabel)
+        actionRow.translatesAutoresizingMaskIntoConstraints = false
+        actionRow.axis = .horizontal
+        actionRow.alignment = .center
+        actionRow.spacing = 4
 
-        indentWidthConstraint = indentView.widthAnchor.constraint(equalToConstant: AppTheme.Metrics.commentRailMinWidth)
+        configureActionButton(upvoteButton, title: "Upvote", imageName: "arrowtriangle.up")
+        configureActionButton(replyButton, title: "Reply", imageName: "arrowshape.turn.up.left")
+        configureActionButton(moreButton, title: nil, imageName: "ellipsis")
 
-        // Layout constraints
+        let actionSpacer = UIView()
+        actionSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        metaRow.addArrangedSubview(authorLabel)
+        metaRow.addArrangedSubview(opBadgeLabel)
+        metaRow.addArrangedSubview(metaDotLabel)
+        metaRow.addArrangedSubview(timeLabel)
+
+        headerRow.addArrangedSubview(metaRow)
+        headerRow.addArrangedSubview(UIView())
+        headerRow.addArrangedSubview(collapseButton)
+
+        actionRow.addArrangedSubview(upvoteButton)
+        actionRow.addArrangedSubview(replyButton)
+        actionRow.addArrangedSubview(actionSpacer)
+        actionRow.addArrangedSubview(moreButton)
+
+        verticalStack.addArrangedSubview(headerRow)
+        verticalStack.addArrangedSubview(commentTextLabel)
+        verticalStack.addArrangedSubview(actionRow)
+
+        headerTapButton.translatesAutoresizingMaskIntoConstraints = false
+        headerTapButton.backgroundColor = .clear
+        headerTapButton.addTarget(self, action: #selector(toggleThread), for: .touchUpInside)
+        headerTapButton.isHidden = true
+        nodeContainerView.addSubview(headerTapButton)
+
+        containerLeadingConstraint = nodeContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
+
         NSLayoutConstraint.activate([
-            containerView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
-            containerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
-            containerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
-            containerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            nodeContainerView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            containerLeadingConstraint!,
+            nodeContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            nodeContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
 
-            // Indent view on the left
-            indentView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 14),
-            indentView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 14),
-            indentView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -14),
+            topBorderView.topAnchor.constraint(equalTo: nodeContainerView.topAnchor),
+            topBorderView.leadingAnchor.constraint(equalTo: nodeContainerView.leadingAnchor),
+            topBorderView.trailingAnchor.constraint(equalTo: nodeContainerView.trailingAnchor),
+            topBorderView.heightAnchor.constraint(equalToConstant: 1),
 
-            // Author and time labels
-            authorLabel.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 14),
-            authorLabel.leadingAnchor.constraint(equalTo: indentView.trailingAnchor, constant: 12),
-            authorLabel.trailingAnchor.constraint(lessThanOrEqualTo: collapseIndicator.leadingAnchor, constant: -8),
+            railButton.leadingAnchor.constraint(equalTo: nodeContainerView.leadingAnchor, constant: -7),
+            railButton.topAnchor.constraint(equalTo: nodeContainerView.topAnchor),
+            railButton.bottomAnchor.constraint(equalTo: nodeContainerView.bottomAnchor),
+            railButton.widthAnchor.constraint(equalToConstant: 14),
 
-            timeLabel.topAnchor.constraint(equalTo: authorLabel.topAnchor),
-            timeLabel.trailingAnchor.constraint(equalTo: collapseIndicator.leadingAnchor, constant: -8),
-            timeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: authorLabel.trailingAnchor, constant: 8),
+            railView.centerXAnchor.constraint(equalTo: railButton.centerXAnchor),
+            railView.topAnchor.constraint(equalTo: railButton.topAnchor),
+            railView.bottomAnchor.constraint(equalTo: railButton.bottomAnchor),
+            railView.widthAnchor.constraint(equalToConstant: 2),
 
-            // Collapse indicator
-            collapseIndicator.centerYAnchor.constraint(equalTo: authorLabel.centerYAnchor),
-            collapseIndicator.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -14),
-            collapseIndicator.widthAnchor.constraint(equalToConstant: 32),
-            collapseIndicator.heightAnchor.constraint(equalToConstant: 32),
+            verticalStack.topAnchor.constraint(equalTo: nodeContainerView.topAnchor, constant: 12),
+            verticalStack.leadingAnchor.constraint(equalTo: nodeContainerView.leadingAnchor, constant: 16),
+            verticalStack.trailingAnchor.constraint(equalTo: nodeContainerView.trailingAnchor, constant: -16),
+            verticalStack.bottomAnchor.constraint(equalTo: nodeContainerView.bottomAnchor, constant: -14),
 
-            // Text label
-            commentTextLabel.topAnchor.constraint(equalTo: authorLabel.bottomAnchor, constant: 4),
-            commentTextLabel.leadingAnchor.constraint(equalTo: indentView.trailingAnchor, constant: 12),
-            commentTextLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -14),
+            opBadgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 28),
 
-            // Collapsed label
-            collapsedLabel.topAnchor.constraint(equalTo: commentTextLabel.topAnchor),
-            collapsedLabel.leadingAnchor.constraint(equalTo: commentTextLabel.leadingAnchor),
-            collapsedLabel.trailingAnchor.constraint(equalTo: commentTextLabel.trailingAnchor),
-            collapsedLabel.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -14)
+            headerTapButton.topAnchor.constraint(equalTo: nodeContainerView.topAnchor),
+            headerTapButton.leadingAnchor.constraint(equalTo: nodeContainerView.leadingAnchor),
+            headerTapButton.trailingAnchor.constraint(equalTo: nodeContainerView.trailingAnchor),
+            headerTapButton.heightAnchor.constraint(equalToConstant: 36)
         ])
-
-        indentWidthConstraint?.isActive = true
-
-        // Add bottom padding constraint for text label
-        let bottomConstraint = commentTextLabel.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -14)
-        bottomConstraint.priority = UILayoutPriority(999)
-        bottomConstraint.isActive = true
     }
 
-    func configure(with node: CommentNode, depth: Int, onToggle: (() -> Void)? = nil) {
+    func configure(with node: CommentNode, depth: Int, storyAuthor: String?, onToggle: (() -> Void)? = nil) {
         self.onToggle = onToggle
 
-        // Set author
-        let author: String
-        if let authorName = node.comment.by {
-            author = authorName
-            authorLabel.text = author
-        } else {
-            author = "[deleted]"
-            authorLabel.text = author
-        }
+        let displayedDepth = min(depth, Int(AppTheme.Metrics.commentMaxDepth))
+        containerLeadingConstraint?.constant = 16 + CGFloat(displayedDepth) * AppTheme.Metrics.commentIndentStep
+        nodeContainerView.backgroundColor = AppTheme.Colors.commentTint(for: displayedDepth)
+        topBorderView.isHidden = depth != 0
 
-        // Set time
-        let timeFormatted: String
-        if let time = node.comment.time {
-            timeFormatted = formatTime(timestamp: time)
-            timeLabel.text = timeFormatted
-        } else {
-            timeFormatted = ""
-            timeLabel.text = ""
-        }
+        let author = node.comment.by ?? "[deleted]"
+        authorLabel.text = author
+        authorLabel.textColor = author == storyAuthor ? AppTheme.Colors.tint : AppTheme.Colors.primaryText
 
-        // Set accessibility labels for the cell
-        let commentText = node.comment.text ?? "[deleted]"
+        let isOP = storyAuthor != nil && author == storyAuthor
+        opBadgeLabel.isHidden = !isOP
+
+        let timeFormatted = node.comment.time.map(formatTime(timestamp:)) ?? ""
+        timeLabel.text = timeFormatted
+        metaDotLabel.isHidden = timeFormatted.isEmpty
+
         contentView.accessibilityLabel = "Comment by \(author)"
-        contentView.accessibilityValue = "\(timeFormatted). \(commentText)"
+        contentView.accessibilityValue = "\(timeFormatted). \(strippedHTMLText(from: node.comment.text ?? "[deleted]"))"
         contentView.accessibilityTraits = .none
 
-        // Set indent based on depth
-        let indentWidth = max(
-            AppTheme.Metrics.commentRailMinWidth,
-            min(
-                CGFloat(depth) * AppTheme.Metrics.commentIndentStep + AppTheme.Metrics.commentRailMinWidth,
-                AppTheme.Metrics.commentIndentMaxWidth
-            )
-        )
-        indentWidthConstraint?.constant = indentWidth
+        let hasReplies = !node.children.isEmpty
+        railButton.isHidden = !hasReplies || depth == 0
+        headerTapButton.isHidden = !hasReplies
+        collapseButton.isHidden = !hasReplies
+        railView.backgroundColor = node.isCollapsed ? AppTheme.Colors.tint : AppTheme.Colors.rail
 
-        // Configure text and collapse state
         if node.isCollapsed {
-            // Show collapsed state
             commentTextLabel.isHidden = true
-            collapsedLabel.isHidden = false
-            let replyCount = node.children.count
-            collapsedLabel.text = "[\(replyCount) more replies]"
-            collapseIndicator.setImage(UIImage(systemName: "chevron.right"), for: .normal)
-            collapseIndicator.accessibilityValue = "\(replyCount) replies"
+            actionRow.isHidden = true
+            collapseButton.backgroundColor = AppTheme.Colors.accentSoft
+            collapseButton.layer.cornerRadius = 999
+            collapseButton.layer.cornerCurve = .continuous
+            collapseButton.contentEdgeInsets = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+            let replyCount = descendantCount(in: node.children)
+            collapseButton.setTitle("+\(replyCount)", for: .normal)
+            collapseButton.setImage(UIImage(systemName: "chevron.down"), for: .normal)
+            collapseButton.semanticContentAttribute = .forceRightToLeft
+            collapseButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: -4)
         } else {
-            // Show text
             commentTextLabel.isHidden = false
-            collapsedLabel.isHidden = true
-            if let html = node.comment.text {
-                commentTextLabel.attributedText = renderHTMLText(html)
-            } else {
-                commentTextLabel.text = "[deleted]"
-            }
-            collapseIndicator.setImage(UIImage(systemName: "chevron.down"), for: .normal)
-            collapseIndicator.accessibilityValue = "Collapse thread"
-        }
-
-        // Show/hide collapse indicator
-        collapseIndicator.isHidden = node.children.isEmpty
-
-        // Configure tap handler for collapse indicator
-        collapseIndicator.removeTarget(nil, action: nil, for: .allEvents)
-        if !node.children.isEmpty {
-            collapseIndicator.addAction(UIAction { [weak self] _ in
-                self?.onToggle?()
-            }, for: .touchUpInside)
+            actionRow.isHidden = false
+            commentTextLabel.attributedText = renderHTMLText(node.comment.text ?? "[deleted]")
+            collapseButton.backgroundColor = .clear
+            collapseButton.layer.cornerRadius = 0
+            collapseButton.contentEdgeInsets = .zero
+            collapseButton.setTitle(nil, for: .normal)
+            collapseButton.setImage(UIImage(systemName: "chevron.up"), for: .normal)
+            collapseButton.semanticContentAttribute = .unspecified
+            collapseButton.imageEdgeInsets = .zero
         }
     }
 
     func renderHTMLText(_ html: String) -> NSAttributedString? {
-        let data = Data(html.utf8)
-        let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
-            .documentType: NSAttributedString.DocumentType.html,
-            .characterEncoding: String.Encoding.utf8.rawValue
-        ]
-
-        guard let attr = try? NSMutableAttributedString(data: data, options: options, documentAttributes: nil) else {
-            return nil
-        }
-
-        // Apply base font and paragraph style
-        let fullRange = NSRange(location: 0, length: attr.length)
+        let text = HTMLTextExtractor.plainText(from: html)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = AppTheme.Metrics.xSmall
-        paragraph.minimumLineHeight = 19
+        paragraph.lineSpacing = 6
+        paragraph.paragraphSpacing = 12
 
-        attr.addAttributes([
-            .font: AppTheme.Typography.commentPreview,
+        return NSAttributedString(string: text, attributes: [
+            .font: AppTheme.Typography.commentBody,
             .paragraphStyle: paragraph,
-            .foregroundColor: UIColor.label
-        ], range: fullRange)
+            .foregroundColor: AppTheme.Colors.primaryText
+        ])
+    }
 
-        return attr
+    private func configureActionButton(_ button: UIButton, title: String?, imageName: String) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.tintColor = AppTheme.Colors.secondaryText
+        button.setTitleColor(AppTheme.Colors.secondaryText, for: .normal)
+        button.titleLabel?.font = AppTheme.Typography.commentMetaDetail
+        button.titleLabel?.adjustsFontForContentSizeCategory = true
+        button.setImage(UIImage(systemName: imageName), for: .normal)
+        button.setTitle(title, for: .normal)
+        button.contentEdgeInsets = UIEdgeInsets(top: 6, left: 8, bottom: 6, right: 10)
+        button.layer.cornerRadius = 8
+        button.layer.cornerCurve = .continuous
+        button.imageView?.contentMode = .scaleAspectFit
+
+        if title != nil {
+            button.semanticContentAttribute = .forceLeftToRight
+            button.titleEdgeInsets = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: -4)
+        }
+    }
+
+    private func descendantCount(in nodes: [CommentNode]) -> Int {
+        nodes.reduce(0) { partialResult, node in
+            partialResult + 1 + descendantCount(in: node.children)
+        }
+    }
+
+    private func strippedHTMLText(from html: String) -> String {
+        HTMLTextExtractor.plainText(from: html)
     }
 
     private func formatTime(timestamp: Int) -> String {
@@ -254,5 +306,9 @@ class CommentCell: UITableViewCell {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    @objc private func toggleThread() {
+        onToggle?()
     }
 }

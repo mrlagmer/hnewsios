@@ -11,7 +11,7 @@ final class SocialImageDisplayPropertyTests: XCTestCase {
         cell.configure(with: story)
 
         XCTAssertEqual(cell.scoreButton.title(for: .normal), "7 ▲")
-        XCTAssertEqual(cell.commentsButton.title(for: .normal), "4 comments")
+        XCTAssertEqual(cell.commentsButton.configuration?.title, "4 comments")
         XCTAssertFalse(cell.topCommentLabel.isHidden)
         XCTAssertFalse(cell.socialImageView.isHidden)
     }

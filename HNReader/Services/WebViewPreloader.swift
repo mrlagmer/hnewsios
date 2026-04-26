@@ -22,9 +22,36 @@ class WebViewPreloader: ObservableObject {
     private var preloadedWebViews: [String: WKWebView] = [:]
     private var webViewLoadOrder: [String] = []  // Track order for LRU eviction
     private var activeWebView: WKWebView?
+    private var navigationObservers: [String: NavigationObserver] = [:]
     
     @Published var activeURL: String?
     @Published var canGoBack: Bool = false
+
+    private final class NavigationObserver: NSObject, WKNavigationDelegate {
+        private var completion: ((Bool) -> Void)?
+
+        init(completion: @escaping (Bool) -> Void) {
+            self.completion = completion
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            complete(success: true)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            complete(success: false)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            complete(success: false)
+        }
+
+        private func complete(success: Bool) {
+            guard let completion else { return }
+            self.completion = nil
+            completion(success)
+        }
+    }
     
     // MARK: - Initialization
     private init() {
@@ -38,6 +65,7 @@ class WebViewPreloader: ObservableObject {
     func preload(url: String) {
         // Don't preload if already cached
         if preloadedWebViews[url] != nil {
+            touch(url: url)
             return
         }
         
@@ -49,11 +77,10 @@ class WebViewPreloader: ObservableObject {
         let webView = createWebView()
         guard let urlObj = URL(string: url) else { return }
         
-        let request = URLRequest(url: urlObj)
+        let request = makeRequest(for: urlObj)
         webView.load(request)
         
-        preloadedWebViews[url] = webView
-        webViewLoadOrder.append(url)
+        cache(webView: webView, for: url)
     }
     
     /// Preloads multiple URLs in batch
@@ -61,6 +88,40 @@ class WebViewPreloader: ObservableObject {
     func preloadMany(urls: [String]) {
         for url in urls {
             preload(url: url)
+        }
+    }
+
+    func preloadForOffline(url: String) async -> Bool {
+        if preloadedWebViews[url] != nil {
+            touch(url: url)
+            return true
+        }
+
+        guard let urlObj = URL(string: url) else { return false }
+
+        if preloadedWebViews.count >= maxCachedWebViews {
+            releaseOldestWebView()
+        }
+
+        let webView = createWebView()
+        let request = makeRequest(for: urlObj)
+        cache(webView: webView, for: url)
+
+        return await withCheckedContinuation { continuation in
+            let observer = NavigationObserver { [weak self, weak webView] success in
+                guard let self else {
+                    continuation.resume(returning: success)
+                    return
+                }
+
+                self.navigationObservers.removeValue(forKey: url)
+                webView?.navigationDelegate = nil
+                continuation.resume(returning: success)
+            }
+
+            navigationObservers[url] = observer
+            webView.navigationDelegate = observer
+            webView.load(request)
         }
     }
     
@@ -72,6 +133,7 @@ class WebViewPreloader: ObservableObject {
         
         // Return preloaded WebView if available
         if let webView = preloadedWebViews[url] {
+            touch(url: url)
             activeWebView = webView
             updateCanGoBack()
             return webView
@@ -81,8 +143,9 @@ class WebViewPreloader: ObservableObject {
         let webView = createWebView()
         guard let urlObj = URL(string: url) else { return webView }
         
-        let request = URLRequest(url: urlObj)
+        let request = makeRequest(for: urlObj)
         webView.load(request)
+        cache(webView: webView, for: url)
         
         activeWebView = webView
         updateCanGoBack()
@@ -149,6 +212,24 @@ class WebViewPreloader: ObservableObject {
         webView.scrollView.showsHorizontalScrollIndicator = false
         
         return webView
+    }
+
+    private func makeRequest(for url: URL) -> URLRequest {
+        URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 30)
+    }
+
+    private func cache(webView: WKWebView, for url: String) {
+        preloadedWebViews[url] = webView
+        touch(url: url)
+
+        if preloadedWebViews.count > maxCachedWebViews {
+            releaseOldestWebView()
+        }
+    }
+
+    private func touch(url: String) {
+        webViewLoadOrder.removeAll { $0 == url }
+        webViewLoadOrder.append(url)
     }
     
     /// Releases the oldest cached WebView to maintain cache size limit

@@ -26,17 +26,5 @@ struct Story: Codable, Identifiable {
     var isValid: Bool {
         !title.isEmpty && id > 0
     }
-    
-    // Custom coding keys to exclude computed properties from Codable
-    enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case score
-        case descendants
-        case url
-        case by
-        case time
-        case kids
-    }
 }
 
