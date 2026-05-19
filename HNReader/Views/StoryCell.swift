@@ -81,7 +81,6 @@ final class StoryCell: UICollectionViewCell {
     private let cardView = UIView()
     private let contentStack = UIStackView()
     private let metaHeaderRow = UIStackView()
-    private let metadataRow = UIStackView()
     private let commentsRow = UIStackView()
     private let socialImageContainer = UIView()
     private let domainLabel = UILabel()
@@ -103,6 +102,45 @@ final class StoryCell: UICollectionViewCell {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupViews()
+    }
+
+    override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+        let targetWidth = layoutAttributes.frame.width
+
+        // Force the cell + contentView to the target width *before* measuring,
+        // and set preferredMaxLayoutWidth on every multi-line UILabel. Without
+        // this, the cell can be measured against a stale (often narrower) width,
+        // labels collapse to ~zero intrinsic height, the stack view compresses
+        // them out of view, and only the buttons render text.
+        if abs(bounds.width - targetWidth) > 0.5 {
+            bounds.size.width = targetWidth
+        }
+        if abs(contentView.bounds.width - targetWidth) > 0.5 {
+            contentView.bounds.size.width = targetWidth
+        }
+
+        let cardInset = AppTheme.Metrics.xSmall * 2
+        let stackInset = AppTheme.Metrics.large * 2
+        let labelWrapWidth = max(0, targetWidth - cardInset - stackInset)
+        if abs(titleLabel.preferredMaxLayoutWidth - labelWrapWidth) > 0.5 {
+            titleLabel.preferredMaxLayoutWidth = labelWrapWidth
+            topCommentLabel.preferredMaxLayoutWidth = labelWrapWidth
+        }
+
+        setNeedsLayout()
+        layoutIfNeeded()
+
+        let targetSize = CGSize(
+            width: targetWidth,
+            height: UIView.layoutFittingCompressedSize.height
+        )
+        let preferredSize = contentView.systemLayoutSizeFitting(
+            targetSize,
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        layoutAttributes.frame.size = CGSize(width: targetWidth, height: ceil(preferredSize.height))
+        return layoutAttributes
     }
 
     override func prepareForReuse() {
@@ -181,8 +219,25 @@ final class StoryCell: UICollectionViewCell {
         topCommentLabel.isHidden = true
 
         scoreButton.translatesAutoresizingMaskIntoConstraints = false
-        scoreButton.accessibilityTraits = .button
-        scoreButton.applyMetaPillStyle()
+        scoreButton.accessibilityTraits = .staticText
+        scoreButton.isUserInteractionEnabled = false
+        var scoreConfig = UIButton.Configuration.plain()
+        scoreConfig.baseForegroundColor = AppTheme.Colors.tint
+        scoreConfig.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 7, bottom: 2, trailing: 7)
+        scoreConfig.image = UIImage(
+            systemName: "arrowtriangle.up",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .regular)
+        )
+        scoreConfig.imagePlacement = .leading
+        scoreConfig.imagePadding = 4
+        scoreConfig.background.backgroundColor = AppTheme.Colors.accentSoft
+        scoreConfig.background.cornerRadius = 10
+        scoreConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = AppTheme.Typography.compactMeta
+            return outgoing
+        }
+        scoreButton.configuration = scoreConfig
 
         commentsButton.translatesAutoresizingMaskIntoConstraints = false
         commentsButton.accessibilityTraits = .button
@@ -207,11 +262,6 @@ final class StoryCell: UICollectionViewCell {
             button.alpha = button.isHighlighted ? 0.7 : 1.0
         }
 
-        metadataRow.translatesAutoresizingMaskIntoConstraints = false
-        metadataRow.axis = .horizontal
-        metadataRow.alignment = .center
-        metadataRow.spacing = AppTheme.Metrics.small
-
         commentsRow.translatesAutoresizingMaskIntoConstraints = false
         commentsRow.axis = .horizontal
         commentsRow.alignment = .center
@@ -229,19 +279,14 @@ final class StoryCell: UICollectionViewCell {
         let metaSpacer = UIView()
         metaSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let metadataSpacer = UIView()
-        metadataSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
         let commentsSpacer = UIView()
         commentsSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
+        metaHeaderRow.addArrangedSubview(scoreButton)
         metaHeaderRow.addArrangedSubview(domainLabel)
         metaHeaderRow.addArrangedSubview(dotLabel)
         metaHeaderRow.addArrangedSubview(ageLabel)
         metaHeaderRow.addArrangedSubview(metaSpacer)
-
-        metadataRow.addArrangedSubview(scoreButton)
-        metadataRow.addArrangedSubview(metadataSpacer)
 
         commentsRow.addArrangedSubview(commentsButton)
         commentsRow.addArrangedSubview(commentsSpacer)
@@ -253,8 +298,6 @@ final class StoryCell: UICollectionViewCell {
         contentStack.addArrangedSubview(titleLabel)
         contentStack.addArrangedSubview(socialImageContainer)
         contentStack.addArrangedSubview(topCommentLabel)
-        contentStack.addArrangedSubview(metadataRow)
-        contentStack.setCustomSpacing(4, after: metadataRow)
         contentStack.addArrangedSubview(commentsRow)
         cardView.addSubview(contentStack)
 
@@ -284,7 +327,7 @@ final class StoryCell: UICollectionViewCell {
         titleLabel.text = story.title
         domainLabel.text = formattedDomain(from: story.url)
         ageLabel.text = formatTime(timestamp: story.time)
-        scoreButton.setTitle("\(story.score) ▲", for: .normal)
+        scoreButton.configuration?.title = "\(story.score)"
         commentsButton.configuration?.title = "\(story.descendants) comments"
 
         let scoreValue = "\(story.score) points"
@@ -314,11 +357,18 @@ final class StoryCell: UICollectionViewCell {
         }
 
         if let url = story.socialImageURL {
+            // Reserve the image's slot up front so the cell measures with the
+            // 168pt image height baked in. If we wait for the image to load and
+            // unhide later, the image's required-priority height constraint
+            // compresses the multi-line labels to zero on the next layout pass.
             socialImageContainer.isHidden = false
+            socialImageView.isHidden = false
+            loadingIndicator.startAnimating()
             loadSocialImage(from: url)
         } else {
             socialImageContainer.isHidden = true
             socialImageView.isHidden = true
+            loadingIndicator.stopAnimating()
         }
     }
 
@@ -358,29 +408,17 @@ final class StoryCell: UICollectionViewCell {
     }
 
     private func loadSocialImage(from url: URL) {
-        socialImageView.isHidden = false
-        loadingIndicator.startAnimating()
-
         imageLoadTask = Task { [weak self] in
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled, let image = UIImage(data: data) else {
-                    await MainActor.run {
-                        self?.loadingIndicator.stopAnimating()
-                        self?.socialImageView.isHidden = true
-                    }
-                    return
-                }
-
+                guard !Task.isCancelled, let image = UIImage(data: data) else { return }
                 await MainActor.run {
-                    self?.loadingIndicator.stopAnimating()
                     self?.socialImageView.image = image
-                    self?.socialImageView.isHidden = false
+                    self?.loadingIndicator.stopAnimating()
                 }
             } catch {
                 await MainActor.run {
                     self?.loadingIndicator.stopAnimating()
-                    self?.socialImageView.isHidden = true
                 }
             }
         }

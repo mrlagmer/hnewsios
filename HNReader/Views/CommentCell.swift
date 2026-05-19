@@ -60,9 +60,7 @@ final class CommentCell: UITableViewCell {
         contentView.clipsToBounds = false
 
         nodeContainerView.translatesAutoresizingMaskIntoConstraints = false
-        nodeContainerView.layer.cornerRadius = 16
-        nodeContainerView.layer.cornerCurve = .continuous
-        nodeContainerView.clipsToBounds = true
+        nodeContainerView.clipsToBounds = false
         contentView.addSubview(nodeContainerView)
 
         topBorderView.translatesAutoresizingMaskIntoConstraints = false
@@ -167,13 +165,13 @@ final class CommentCell: UITableViewCell {
         headerTapButton.isHidden = true
         nodeContainerView.addSubview(headerTapButton)
 
-        containerLeadingConstraint = nodeContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
+        containerLeadingConstraint = nodeContainerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 0)
 
         NSLayoutConstraint.activate([
             nodeContainerView.topAnchor.constraint(equalTo: contentView.topAnchor),
             containerLeadingConstraint!,
-            nodeContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            nodeContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
+            nodeContainerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            nodeContainerView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             topBorderView.topAnchor.constraint(equalTo: nodeContainerView.topAnchor),
             topBorderView.leadingAnchor.constraint(equalTo: nodeContainerView.leadingAnchor),
@@ -208,7 +206,7 @@ final class CommentCell: UITableViewCell {
         self.onToggle = onToggle
 
         let displayedDepth = min(depth, Int(AppTheme.Metrics.commentMaxDepth))
-        containerLeadingConstraint?.constant = 16 + CGFloat(displayedDepth) * AppTheme.Metrics.commentIndentStep
+        containerLeadingConstraint?.constant = CGFloat(displayedDepth) * AppTheme.Metrics.commentIndentStep
         nodeContainerView.backgroundColor = AppTheme.Colors.commentTint(for: displayedDepth)
         topBorderView.isHidden = depth != 0
 
@@ -228,7 +226,8 @@ final class CommentCell: UITableViewCell {
         contentView.accessibilityTraits = .none
 
         let hasReplies = !node.children.isEmpty
-        railButton.isHidden = !hasReplies || depth == 0
+        railButton.isHidden = depth == 0
+        railButton.isUserInteractionEnabled = hasReplies
         headerTapButton.isHidden = !hasReplies
         collapseButton.isHidden = !hasReplies
         railView.backgroundColor = node.isCollapsed ? AppTheme.Colors.tint : AppTheme.Colors.rail

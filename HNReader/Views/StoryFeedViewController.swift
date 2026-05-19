@@ -42,6 +42,7 @@ final class StoryFeedViewController: UIViewController {
     private var maximumObservedPullDistance: CGFloat = 0
     private var isTopBarHidden = false
     private var hasAppliedInitialSnapshot = false
+    private var timestampTimer: Timer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -394,7 +395,8 @@ final class StoryFeedViewController: UIViewController {
     }
 
     @objc private func saveStateOnBackground() {
-        // Save current page number when app goes to background
+        timestampTimer?.invalidate()
+        timestampTimer = nil
         Task {
             await viewModel.saveCurrentPageState()
         }
@@ -402,13 +404,22 @@ final class StoryFeedViewController: UIViewController {
 
     @objc private func refreshFeedOnForeground() {
         guard isViewLoaded, !viewModel.stories.isEmpty else { return }
-        applyStoriesSnapshot(viewModel.stories, animated: false)
+        collectionView.reloadData()
+        updateTopBarTimestamp()
+        startTimestampTimer()
     }
 
     private func applyStoriesSnapshot(_ stories: [Story], animated _: Bool) {
+        // Cache loads can arrive before the first layout pass, leaving the
+        // collection view with zero bounds. Force layout now so cells get a
+        // real width when preferredLayoutAttributesFitting is called.
+        if collectionView.bounds.width == 0 {
+            view.layoutIfNeeded()
+        }
         collectionView.reloadData()
-        lastUpdatedAt = Date()
+        lastUpdatedAt = viewModel.lastFetchedAt
         updateTopBarTimestamp()
+        startTimestampTimer()
 
         if self.shouldRestoreScrollPosition && self.savedScrollPosition > 0 {
             DispatchQueue.main.async {
@@ -448,9 +459,16 @@ final class StoryFeedViewController: UIViewController {
         setCommentsOpen(false, animated: true)
     }
 
+    private func startTimestampTimer() {
+        timestampTimer?.invalidate()
+        timestampTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.updateTopBarTimestamp()
+        }
+    }
+
     private func updateTopBarTimestamp() {
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
+        formatter.unitsStyle = .full
         topBarUpdatedLabel.text = "Updated \(formatter.localizedString(for: lastUpdatedAt, relativeTo: Date()))"
     }
 

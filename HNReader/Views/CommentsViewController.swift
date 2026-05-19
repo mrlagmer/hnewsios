@@ -239,7 +239,7 @@ final class CommentsViewController: UIViewController {
         pointsPillView.layer.cornerCurve = .continuous
 
         pointsPillImageView.translatesAutoresizingMaskIntoConstraints = false
-        pointsPillImageView.image = UIImage(systemName: "arrowtriangle.up.fill")
+        pointsPillImageView.image = UIImage(systemName: "arrowtriangle.up")
         pointsPillImageView.tintColor = AppTheme.Colors.tint
         pointsPillImageView.contentMode = .scaleAspectFit
         pointsPillView.addSubview(pointsPillImageView)
@@ -314,7 +314,7 @@ final class CommentsViewController: UIViewController {
             summaryContentView.bottomAnchor.constraint(equalTo: summaryHeaderView.bottomAnchor),
             summaryContentView.widthAnchor.constraint(equalTo: summaryHeaderView.widthAnchor),
 
-            metaRow.topAnchor.constraint(equalTo: summaryContentView.topAnchor, constant: 12),
+            metaRow.topAnchor.constraint(equalTo: summaryContentView.topAnchor, constant: 4),
             metaRow.leadingAnchor.constraint(equalTo: summaryContentView.leadingAnchor, constant: 16),
             metaRow.trailingAnchor.constraint(equalTo: summaryContentView.trailingAnchor, constant: -16),
 

@@ -88,8 +88,15 @@ actor HackerNewsAPI {
             
             let decoder = JSONDecoder()
             let story = try decoder.decode(Story.self, from: data)
+
+            // Filter out invalid stories (missing title, etc) so they don't
+            // appear in the feed as empty placeholders.
+            guard story.isValid else {
+                throw HNError.decodingFailed
+            }
+
             return story
-            
+
         } catch is DecodingError {
             throw HNError.decodingFailed
         } catch is URLError {
@@ -100,7 +107,7 @@ actor HackerNewsAPI {
             throw HNError.networkUnavailable
         }
     }
-    
+
     /// Fetches a single comment by ID
     /// - Parameter id: The comment ID
     /// - Returns: Comment object (only valid comments, filters deleted/dead)

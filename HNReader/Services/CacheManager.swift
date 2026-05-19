@@ -192,6 +192,23 @@ actor CacheManager {
         }
     }
 
+    /// Returns the timestamp of the stored story feed snapshot
+    func getStoriesTimestamp() async -> Date? {
+        let fileURL = cacheDirectory.appendingPathComponent(storiesFileName)
+
+        guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let cacheEntry = try await Task.detached(priority: .background) { () -> StoriesCacheEntry in
+                try JSONDecoder().decode(StoriesCacheEntry.self, from: data)
+            }.value
+            return Date(timeIntervalSince1970: cacheEntry.timestamp / 1000)
+        } catch {
+            return nil
+        }
+    }
+
     /// Removes the persisted story feed snapshot
     func clearStories() async {
         let fileURL = cacheDirectory.appendingPathComponent(storiesFileName)

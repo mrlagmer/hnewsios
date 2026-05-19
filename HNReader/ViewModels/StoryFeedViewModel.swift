@@ -19,6 +19,7 @@ class StoryFeedViewModel: ObservableObject {
     @Published var offlineMode: Bool = false
     @Published var downloadProgress: (completed: Int, total: Int) = (0, 0)
     @Published var errorMessage: String?
+    @Published var lastFetchedAt: Date = Date()
     
     // MARK: - Services
     private let api = HackerNewsAPI.shared
@@ -54,8 +55,9 @@ class StoryFeedViewModel: ObservableObject {
             topStoryIDs = try await api.fetchTopStoryIDs()
             
             // Load first page
+            lastFetchedAt = Date()
             await loadPage(0)
-            
+
             isLoading = false
         } catch {
             // Try to restore from cache
@@ -103,8 +105,9 @@ class StoryFeedViewModel: ObservableObject {
             topStoryIDs = try await api.fetchTopStoryIDs()
             
             // Load first page
+            lastFetchedAt = Date()
             await loadPage(0)
-            
+
             isRefreshing = false
         } catch {
             isRefreshing = false
@@ -210,13 +213,16 @@ class StoryFeedViewModel: ObservableObject {
         
         let pageStoryIDs = Array(topStoryIDs[startIndex..<endIndex])
         
-        // Fetch story metadata in parallel (limit 20 concurrent requests)
+        // Fetch story metadata in parallel (limit 20 concurrent requests).
+        // Failed fetches (deleted/dead items, decode errors, transient network
+        // failures on a single ID) are dropped so they don't appear as broken
+        // placeholder cards in the feed.
         var pageStories: [Story] = []
-        
+
         for storyID in pageStoryIDs {
-            // `fetchStoryMetadata` handles its own errors and returns a fallback Story on failure.
-            let story = await fetchStoryMetadata(id: storyID)
-            pageStories.append(story)
+            if let story = await fetchStoryMetadata(id: storyID) {
+                pageStories.append(story)
+            }
         }
         
         // Append to stories array
@@ -233,31 +239,32 @@ class StoryFeedViewModel: ObservableObject {
 
         stories = cachedStories
         currentPage = await cache.getCurrentPage() ?? max((cachedStories.count - 1) / pageSize, 0)
+        lastFetchedAt = await cache.getStoriesTimestamp() ?? Date()
         return true
     }
     
-    /// Fetches story metadata including top comment and social image
-    /// - Parameter id: The story ID
-    /// - Returns: Story with metadata
-    private func fetchStoryMetadata(id: Int) async -> Story {
+    /// Fetches story metadata including top comment and social image.
+    /// Returns nil when the item can't be loaded (deleted/dead, decode failure,
+    /// or transient network error) so callers can omit it from the feed
+    /// rather than rendering a broken placeholder.
+    private func fetchStoryMetadata(id: Int) async -> Story? {
         do {
             var story = try await api.fetchStory(id: id)
-            
+
             // Fetch top comment
             if let topCommentId = story.kids?.first {
                 story.topComment = try? await api.fetchComment(id: topCommentId)
             }
-            
+
             // Extract social image
             if let url = story.url {
                 story.socialImageURL = await imageExtractor.extractSocialImage(from: url)
             }
-            
+
             return story
         } catch {
             print("❌ Error fetching story metadata for \(id): \(error)")
-            // Return a default story on error
-            return Story(id: id, title: "Error loading story", score: 0, descendants: 0, url: nil, by: nil, time: 0, kids: nil)
+            return nil
         }
     }
 }
