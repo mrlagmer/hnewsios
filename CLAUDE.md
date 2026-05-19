@@ -44,7 +44,7 @@ Deployment target: **iOS 26.2**. No CocoaPods, SPM packages, or Fastlane — pur
 
 **Comment tree:** `CommentsViewModel` fetches comments as a flat array, then organises them into a `[CommentNode]` tree (each node has `children: [CommentNode]` and `isCollapsed: Bool`). `CommentsViewController` uses `CommentTreeFlattener` to flatten the tree back to a list for `UITableView` display, with depth tracked for indentation.
 
-**iPad layout:** `StoryFeedViewController.createLayout(for:)` uses `UICollectionViewCompositionalLayout` with a closure that checks `environment.container.effectiveContentSize.width > 700` to switch between 1-column (iPhone/split-view iPad) and 2-column (full-screen iPad) grids. `StoryCell` overrides `preferredLayoutAttributesFitting` with `systemLayoutSizeFitting(...horizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)` to ensure correct self-sizing at any column width.
+**Feed layout:** `StoryFeedViewController.createLayout(for:)` uses a single-column `UICollectionViewCompositionalLayout` (one full-width story per row on every device, including full-screen iPad — a 2-column variant was tried and reverted because uneven card heights left large gaps under shorter cards). `StoryCell` overrides `preferredLayoutAttributesFitting` with `systemLayoutSizeFitting(...horizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)` to ensure correct self-sizing.
 
 **Offline mode:** `StoryFeedViewModel.downloadForOffline()` fetches all stories, comments, and pre-renders articles via `WebViewPreloader.preloadForOffline`. Progress is tracked via `downloadProgress: (completed: Int, total: Int)` published to the `OfflineButton`.
 

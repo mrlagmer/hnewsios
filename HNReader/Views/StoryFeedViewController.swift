@@ -152,35 +152,19 @@ final class StoryFeedViewController: UIViewController {
     }
 
     private func createLayout(for traits: UITraitCollection) -> UICollectionViewLayout {
-        let layout = UICollectionViewCompositionalLayout { (sectionIndex, environment) -> NSCollectionLayoutSection? in
-            let isWide = environment.traitCollection.horizontalSizeClass == .regular && environment.container.effectiveContentSize.width > 700
+        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1.0), heightDimension: .estimated(260))
+        let item = NSCollectionLayoutItem(layoutSize: itemSize)
+        let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
 
-            let columns = isWide ? 2 : 1
-            let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1.0), heightDimension: .estimated(260))
-            let item = NSCollectionLayoutItem(layoutSize: itemSize)
-
-            let groupWidth = NSCollectionLayoutDimension.fractionalWidth(1.0)
-            let groupSize = NSCollectionLayoutSize(widthDimension: groupWidth, heightDimension: .estimated(260))
-            let group: NSCollectionLayoutGroup
-            if columns == 1 {
-                group = NSCollectionLayoutGroup.vertical(layoutSize: groupSize, subitems: [item])
-            } else {
-                group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize, repeatingSubitem: item, count: columns)
-                group.interItemSpacing = .fixed(AppTheme.Metrics.large)
-            }
-
-            let section = NSCollectionLayoutSection(group: group)
-            section.contentInsets = NSDirectionalEdgeInsets(
-                top: AppTheme.Metrics.medium,
-                leading: AppTheme.Metrics.large,
-                bottom: AppTheme.Metrics.medium,
-                trailing: AppTheme.Metrics.large
-            )
-            section.interGroupSpacing = AppTheme.Metrics.large
-            return section
-        }
-
-        return layout
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsets = NSDirectionalEdgeInsets(
+            top: AppTheme.Metrics.medium,
+            leading: AppTheme.Metrics.large,
+            bottom: AppTheme.Metrics.medium,
+            trailing: AppTheme.Metrics.large
+        )
+        section.interGroupSpacing = AppTheme.Metrics.large
+        return UICollectionViewCompositionalLayout(section: section)
     }
 
     private func setupLoadingView() {
@@ -496,6 +480,11 @@ final class StoryFeedViewController: UIViewController {
         offlineButton.apply(state: state, progress: percentage, animated: true)
     }
 
+    private func presentAISummary(for story: Story) {
+        let sheet = AISummarySheetViewController(story: story)
+        present(sheet, animated: false)
+    }
+
     private func openComments(for story: Story) {
         activeCommentsViewController?.willMove(toParent: nil)
         activeCommentsViewController?.view.removeFromSuperview()
@@ -591,9 +580,15 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
             return cell
         }
 
-        cell.configure(with: story, onCommentsTap: { [weak self] in
-            self?.openComments(for: story)
-        })
+        cell.configure(
+            with: story,
+            onCommentsTap: { [weak self] in
+                self?.openComments(for: story)
+            },
+            onAISummaryTap: { [weak self] in
+                self?.presentAISummary(for: story)
+            }
+        )
 
         return cell
     }

@@ -9,6 +9,7 @@ enum HTMLTextExtractor {
     static func plainText(from html: String) -> String {
         let previewText = html
             .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<p[^>]*>", with: "\n", options: .regularExpression)
             .replacingOccurrences(of: "(?i)</(p|div|li|blockquote)>", with: "\n", options: .regularExpression)
             .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
 
@@ -17,7 +18,7 @@ enum HTMLTextExtractor {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .joined(separator: "\n\n")
+            .joined(separator: "\n")
     }
 
     private static func decodeHTMLEntities(in text: String) -> String {
@@ -87,9 +88,17 @@ final class StoryCell: UICollectionViewCell {
     private let ageLabel = UILabel()
     let titleLabel = UILabel()
     let socialImageView = UIImageView()
-    let topCommentLabel = UILabel()
+    private let topCommentView = UIView()
+    private let topCommentMetaRow = UIStackView()
+    private let topCommentTagLabel = UILabel()
+    private let topCommentUserLabel = UILabel()
+    private let topCommentAgeLabel = UILabel()
+    private let quoteContainerView = UIView()
+    private let quoteBarView = UIView()
+    let quoteTextLabel = UILabel()
     let scoreButton = UIButton(type: .system)
     let commentsButton = UIButton(type: .system)
+    let aiSummaryButton = AISummaryButton()
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
 
     private var imageLoadTask: Task<Void, Never>?
@@ -122,9 +131,10 @@ final class StoryCell: UICollectionViewCell {
         let cardInset = AppTheme.Metrics.xSmall * 2
         let stackInset = AppTheme.Metrics.large * 2
         let labelWrapWidth = max(0, targetWidth - cardInset - stackInset)
+        let quoteTextWrapWidth = max(0, labelWrapWidth - 15)
         if abs(titleLabel.preferredMaxLayoutWidth - labelWrapWidth) > 0.5 {
             titleLabel.preferredMaxLayoutWidth = labelWrapWidth
-            topCommentLabel.preferredMaxLayoutWidth = labelWrapWidth
+            quoteTextLabel.preferredMaxLayoutWidth = quoteTextWrapWidth
         }
 
         setNeedsLayout()
@@ -148,14 +158,17 @@ final class StoryCell: UICollectionViewCell {
         titleLabel.text = nil
         domainLabel.text = nil
         ageLabel.text = nil
-        topCommentLabel.attributedText = nil
+        quoteTextLabel.attributedText = nil
+        quoteTextLabel.text = nil
         socialImageView.image = nil
         socialImageContainer.isHidden = true
         socialImageView.isHidden = false
-        topCommentLabel.isHidden = true
+        topCommentView.isHidden = true
         loadingIndicator.stopAnimating()
         imageLoadTask?.cancel()
         imageLoadTask = nil
+        aiSummaryButton.removeTarget(nil, action: nil, for: .allEvents)
+        aiSummaryButton.isHidden = true
     }
 
     private func setupViews() {
@@ -209,14 +222,94 @@ final class StoryCell: UICollectionViewCell {
         socialImageView.clipsToBounds = true
         socialImageView.accessibilityLabel = "Story preview image"
 
-        topCommentLabel.translatesAutoresizingMaskIntoConstraints = false
-        topCommentLabel.numberOfLines = 0
-        topCommentLabel.lineBreakMode = .byWordWrapping
-        topCommentLabel.font = AppTheme.Typography.storySummaryBody
-        topCommentLabel.adjustsFontForContentSizeCategory = true
-        topCommentLabel.textColor = AppTheme.Colors.secondaryText
-        topCommentLabel.accessibilityLabel = "Top comment"
-        topCommentLabel.isHidden = true
+        // Top comment quote block
+        topCommentView.translatesAutoresizingMaskIntoConstraints = false
+        topCommentView.isHidden = true
+
+        topCommentMetaRow.translatesAutoresizingMaskIntoConstraints = false
+        topCommentMetaRow.axis = .horizontal
+        topCommentMetaRow.alignment = .center
+        topCommentMetaRow.spacing = 4
+
+        topCommentTagLabel.translatesAutoresizingMaskIntoConstraints = false
+        topCommentTagLabel.attributedText = NSAttributedString(
+            string: "TOP COMMENT",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 10, weight: .bold),
+                .foregroundColor: AppTheme.Colors.tertiaryText,
+                .kern: 0.8
+            ]
+        )
+
+        topCommentUserLabel.translatesAutoresizingMaskIntoConstraints = false
+        topCommentUserLabel.font = AppTheme.Typography.compactMeta
+        topCommentUserLabel.adjustsFontForContentSizeCategory = true
+        topCommentUserLabel.textColor = AppTheme.Colors.primaryText
+
+        topCommentAgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        topCommentAgeLabel.font = AppTheme.Typography.compactMeta
+        topCommentAgeLabel.adjustsFontForContentSizeCategory = true
+        topCommentAgeLabel.textColor = AppTheme.Colors.secondaryText
+
+        let metaDot1 = UILabel()
+        metaDot1.font = AppTheme.Typography.compactMeta
+        metaDot1.textColor = AppTheme.Colors.tertiaryText
+        metaDot1.text = "·"
+
+        let metaDot2 = UILabel()
+        metaDot2.font = AppTheme.Typography.compactMeta
+        metaDot2.textColor = AppTheme.Colors.tertiaryText
+        metaDot2.text = "·"
+
+        let metaRowSpacer = UIView()
+        metaRowSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        topCommentMetaRow.addArrangedSubview(topCommentTagLabel)
+        topCommentMetaRow.addArrangedSubview(metaDot1)
+        topCommentMetaRow.addArrangedSubview(topCommentUserLabel)
+        topCommentMetaRow.addArrangedSubview(metaDot2)
+        topCommentMetaRow.addArrangedSubview(topCommentAgeLabel)
+        topCommentMetaRow.addArrangedSubview(metaRowSpacer)
+
+        quoteContainerView.translatesAutoresizingMaskIntoConstraints = false
+
+        quoteBarView.translatesAutoresizingMaskIntoConstraints = false
+        quoteBarView.backgroundColor = AppTheme.Colors.tint
+        quoteBarView.layer.cornerRadius = 1.5
+
+        quoteTextLabel.translatesAutoresizingMaskIntoConstraints = false
+        quoteTextLabel.numberOfLines = 0
+        quoteTextLabel.lineBreakMode = .byWordWrapping
+        quoteTextLabel.font = AppTheme.Typography.storySummaryBody
+        quoteTextLabel.adjustsFontForContentSizeCategory = true
+        quoteTextLabel.textColor = AppTheme.Colors.primaryText
+        quoteTextLabel.accessibilityLabel = "Top comment"
+
+        quoteContainerView.addSubview(quoteBarView)
+        quoteContainerView.addSubview(quoteTextLabel)
+        topCommentView.addSubview(topCommentMetaRow)
+        topCommentView.addSubview(quoteContainerView)
+
+        NSLayoutConstraint.activate([
+            quoteBarView.topAnchor.constraint(equalTo: quoteContainerView.topAnchor),
+            quoteBarView.bottomAnchor.constraint(equalTo: quoteContainerView.bottomAnchor),
+            quoteBarView.leadingAnchor.constraint(equalTo: quoteContainerView.leadingAnchor),
+            quoteBarView.widthAnchor.constraint(equalToConstant: 3),
+
+            quoteTextLabel.topAnchor.constraint(equalTo: quoteContainerView.topAnchor),
+            quoteTextLabel.bottomAnchor.constraint(equalTo: quoteContainerView.bottomAnchor),
+            quoteTextLabel.leadingAnchor.constraint(equalTo: quoteBarView.trailingAnchor, constant: 12),
+            quoteTextLabel.trailingAnchor.constraint(equalTo: quoteContainerView.trailingAnchor),
+
+            topCommentMetaRow.topAnchor.constraint(equalTo: topCommentView.topAnchor),
+            topCommentMetaRow.leadingAnchor.constraint(equalTo: topCommentView.leadingAnchor),
+            topCommentMetaRow.trailingAnchor.constraint(equalTo: topCommentView.trailingAnchor),
+
+            quoteContainerView.topAnchor.constraint(equalTo: topCommentMetaRow.bottomAnchor, constant: 8),
+            quoteContainerView.leadingAnchor.constraint(equalTo: topCommentView.leadingAnchor),
+            quoteContainerView.trailingAnchor.constraint(equalTo: topCommentView.trailingAnchor),
+            quoteContainerView.bottomAnchor.constraint(equalTo: topCommentView.bottomAnchor),
+        ])
 
         scoreButton.translatesAutoresizingMaskIntoConstraints = false
         scoreButton.accessibilityTraits = .staticText
@@ -290,6 +383,7 @@ final class StoryCell: UICollectionViewCell {
 
         commentsRow.addArrangedSubview(commentsButton)
         commentsRow.addArrangedSubview(commentsSpacer)
+        commentsRow.addArrangedSubview(aiSummaryButton)
 
         socialImageContainer.addSubview(socialImageView)
         socialImageContainer.addSubview(loadingIndicator)
@@ -297,7 +391,7 @@ final class StoryCell: UICollectionViewCell {
         contentStack.addArrangedSubview(metaHeaderRow)
         contentStack.addArrangedSubview(titleLabel)
         contentStack.addArrangedSubview(socialImageContainer)
-        contentStack.addArrangedSubview(topCommentLabel)
+        contentStack.addArrangedSubview(topCommentView)
         contentStack.addArrangedSubview(commentsRow)
         cardView.addSubview(contentStack)
 
@@ -323,7 +417,11 @@ final class StoryCell: UICollectionViewCell {
         ])
     }
 
-    func configure(with story: Story, onCommentsTap: (() -> Void)? = nil) {
+    func configure(
+        with story: Story,
+        onCommentsTap: (() -> Void)? = nil,
+        onAISummaryTap: (() -> Void)? = nil
+    ) {
         titleLabel.text = story.title
         domainLabel.text = formattedDomain(from: story.url)
         ageLabel.text = formatTime(timestamp: story.time)
@@ -347,13 +445,23 @@ final class StoryCell: UICollectionViewCell {
             commentsButton.addAction(UIAction { _ in onTap() }, for: .touchUpInside)
         }
 
-        if let html = story.topComment?.text {
-            topCommentLabel.attributedText = renderHTMLComment(html)
-            topCommentLabel.isHidden = false
+        aiSummaryButton.removeTarget(nil, action: nil, for: .allEvents)
+        if let onSummary = onAISummaryTap {
+            aiSummaryButton.addAction(UIAction { _ in onSummary() }, for: .touchUpInside)
+            aiSummaryButton.isHidden = false
         } else {
-            topCommentLabel.attributedText = nil
-            topCommentLabel.text = nil
-            topCommentLabel.isHidden = true
+            aiSummaryButton.isHidden = true
+        }
+
+        if let comment = story.topComment, let html = comment.text {
+            topCommentUserLabel.text = comment.by ?? ""
+            topCommentAgeLabel.text = comment.time.map { formatTime(timestamp: $0) } ?? ""
+            quoteTextLabel.attributedText = renderHTMLComment(html)
+            topCommentView.isHidden = false
+        } else {
+            quoteTextLabel.attributedText = nil
+            quoteTextLabel.text = nil
+            topCommentView.isHidden = true
         }
 
         if let url = story.socialImageURL {
@@ -387,7 +495,7 @@ final class StoryCell: UICollectionViewCell {
         return NSAttributedString(string: decodedText, attributes: [
             .font: AppTheme.Typography.storySummaryBody,
             .paragraphStyle: paragraph,
-            .foregroundColor: AppTheme.Colors.secondaryText
+            .foregroundColor: AppTheme.Colors.primaryText
         ])
     }
 
@@ -411,13 +519,21 @@ final class StoryCell: UICollectionViewCell {
         imageLoadTask = Task { [weak self] in
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled, let image = UIImage(data: data) else { return }
+                guard !Task.isCancelled else { return }
+                guard let image = UIImage(data: data) else {
+                    await MainActor.run {
+                        self?.socialImageContainer.isHidden = true
+                        self?.loadingIndicator.stopAnimating()
+                    }
+                    return
+                }
                 await MainActor.run {
                     self?.socialImageView.image = image
                     self?.loadingIndicator.stopAnimating()
                 }
             } catch {
                 await MainActor.run {
+                    self?.socialImageContainer.isHidden = true
                     self?.loadingIndicator.stopAnimating()
                 }
             }

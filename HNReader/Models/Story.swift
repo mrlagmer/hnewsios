@@ -29,6 +29,7 @@ struct Story: Codable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, title, score, descendants, url, by, time, kids, deleted, dead
+        case topComment, socialImageURL
     }
 
     init(id: Int, title: String, score: Int, descendants: Int, url: String?, by: String?, time: Int, kids: [Int]?) {
@@ -67,6 +68,8 @@ struct Story: Codable, Identifiable {
         self.by = try container.decodeIfPresent(String.self, forKey: .by)
         self.time = try container.decodeIfPresent(Int.self, forKey: .time) ?? 0
         self.kids = try container.decodeIfPresent([Int].self, forKey: .kids)
+        self.topComment = try container.decodeIfPresent(Comment.self, forKey: .topComment)
+        self.socialImageURL = try container.decodeIfPresent(URL.self, forKey: .socialImageURL)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -79,6 +82,8 @@ struct Story: Codable, Identifiable {
         try container.encodeIfPresent(by, forKey: .by)
         try container.encode(time, forKey: .time)
         try container.encodeIfPresent(kids, forKey: .kids)
+        try container.encodeIfPresent(topComment, forKey: .topComment)
+        try container.encodeIfPresent(socialImageURL, forKey: .socialImageURL)
     }
 }
 
