@@ -31,6 +31,8 @@ final class AISummarySheetViewController: UIViewController {
     private let bodyStack = UIStackView()
     private let skeletonView = AISummarySkeletonView()
 
+    var onThemeTapped: (() -> Void)?
+
     private var sheetBottomConstraint: NSLayoutConstraint!
 
     init(story: Story) {
@@ -261,6 +263,15 @@ final class AISummarySheetViewController: UIViewController {
         }
     }
 
+    @objc private func themeTapped() {
+        loadTask?.cancel()
+        animateSheetOut { [weak self] in
+            self?.dismiss(animated: false) {
+                self?.onThemeTapped?()
+            }
+        }
+    }
+
     private func runGeneration() async {
         do {
             let summary = try await AISummaryService.shared.summarise(story: story)
@@ -381,7 +392,18 @@ final class AISummarySheetViewController: UIViewController {
     }
 
     private func makeThemeRow(index: Int, theme: AISummary.Theme) -> UIView {
-        let container = UIView()
+        let button = UIButton(type: .custom)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.backgroundColor = AppTheme.Colors.surfaceAlt
+        button.layer.cornerRadius = 10
+        button.layer.cornerCurve = .continuous
+        button.clipsToBounds = true
+        button.addTarget(self, action: #selector(themeTapped), for: .touchUpInside)
+        button.configurationUpdateHandler = { btn in
+            UIView.animate(withDuration: 0.1) {
+                btn.alpha = btn.isHighlighted ? 0.6 : 1.0
+            }
+        }
 
         let badge = UILabel()
         badge.translatesAutoresizingMaskIntoConstraints = false
@@ -435,23 +457,38 @@ final class AISummarySheetViewController: UIViewController {
         textStack.translatesAutoresizingMaskIntoConstraints = false
         textStack.axis = .vertical
         textStack.spacing = 2
+        textStack.isUserInteractionEnabled = false
 
-        container.addSubview(badge)
-        container.addSubview(textStack)
+        let chevron = UIImageView(image: UIImage(
+            systemName: "chevron.right",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        ))
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.tintColor = AppTheme.Colors.tertiaryText
+        chevron.contentMode = .scaleAspectFit
+        chevron.isUserInteractionEnabled = false
+
+        button.addSubview(badge)
+        button.addSubview(textStack)
+        button.addSubview(chevron)
 
         NSLayoutConstraint.activate([
-            badge.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
-            badge.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            badge.topAnchor.constraint(equalTo: button.topAnchor, constant: 12),
+            badge.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
             badge.widthAnchor.constraint(equalToConstant: 22),
             badge.heightAnchor.constraint(equalToConstant: 22),
 
-            textStack.topAnchor.constraint(equalTo: container.topAnchor),
+            chevron.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            chevron.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
+            chevron.widthAnchor.constraint(equalToConstant: 8),
+
+            textStack.topAnchor.constraint(equalTo: button.topAnchor, constant: 10),
             textStack.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10),
-            textStack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            textStack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            textStack.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -10),
+            textStack.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -12)
         ])
 
-        return container
+        return button
     }
 
     private func makeDisclaimer() -> UIView {

@@ -21,6 +21,79 @@ enum HTMLTextExtractor {
             .joined(separator: "\n")
     }
 
+    /// Like `plainText`, but preserves `<a href="...">` spans as `.link` attributes
+    /// so a UITextView can render them as tappable links.
+    static func attributedText(
+        from html: String,
+        baseAttributes: [NSAttributedString.Key: Any],
+        linkAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        let normalized = html
+            .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<p[^>]*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</(p|div|li|blockquote)>", with: "\n", options: .regularExpression)
+
+        let output = NSMutableAttributedString()
+
+        // Walk the string, emitting plain spans for anything outside <a href="...">...</a>
+        // and link-attributed spans for what's inside. Uses NSRegularExpression because
+        // we need capture groups (href + inner text) and ordered iteration.
+        let anchorPattern = "(?is)<a\\s+[^>]*href\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</a>"
+        guard let regex = try? NSRegularExpression(pattern: anchorPattern) else {
+            output.append(NSAttributedString(string: cleanPlainSpan(normalized), attributes: baseAttributes))
+            return output
+        }
+
+        let nsString = normalized as NSString
+        var cursor = 0
+
+        regex.enumerateMatches(in: normalized, range: NSRange(location: 0, length: nsString.length)) { match, _, _ in
+            guard let match,
+                  match.numberOfRanges == 3 else { return }
+
+            // Emit the plain-text run before this anchor
+            if match.range.location > cursor {
+                let plainRange = NSRange(location: cursor, length: match.range.location - cursor)
+                let plainSpan = cleanPlainSpan(nsString.substring(with: plainRange))
+                if !plainSpan.isEmpty {
+                    output.append(NSAttributedString(string: plainSpan, attributes: baseAttributes))
+                }
+            }
+
+            let hrefRaw = nsString.substring(with: match.range(at: 1))
+            let innerRaw = nsString.substring(with: match.range(at: 2))
+            let href = decodeHTMLEntities(in: hrefRaw)
+            let inner = cleanPlainSpan(innerRaw)
+            let display = inner.isEmpty ? href : inner
+
+            var attrs = baseAttributes.merging(linkAttributes) { _, new in new }
+            if let url = URL(string: href) {
+                attrs[.link] = url
+            }
+            output.append(NSAttributedString(string: display, attributes: attrs))
+
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < nsString.length {
+            let tailRange = NSRange(location: cursor, length: nsString.length - cursor)
+            let tail = cleanPlainSpan(nsString.substring(with: tailRange))
+            if !tail.isEmpty {
+                output.append(NSAttributedString(string: tail, attributes: baseAttributes))
+            }
+        }
+
+        return output
+    }
+
+    /// Strip remaining tags, decode entities, and collapse whitespace within a span
+    /// while preserving paragraph breaks (we already converted block tags to `\n`).
+    private static func cleanPlainSpan(_ text: String) -> String {
+        let stripped = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        return decodeHTMLEntities(in: stripped)
+            .replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+    }
+
     private static func decodeHTMLEntities(in text: String) -> String {
         let decodedNumericEntities = decodeNumericHTMLEntities(in: text)
         let entities: [(String, String)] = [

@@ -5,7 +5,7 @@ import Combine
 final class StoryFeedViewController: UIViewController {
 
     private enum UI {
-        static let topBarHeight: CGFloat = 64
+        static let topBarHeight: CGFloat = 76
         static let topBarHorizontalInset: CGFloat = 16
         static let topBarVerticalInset: CGFloat = 0
         static let offlineButtonHeight: CGFloat = 36
@@ -18,7 +18,10 @@ final class StoryFeedViewController: UIViewController {
     private var collectionView: UICollectionView!
     private var storyIDs: [Int] = []
     private var storiesById: [Int: Story] = [:]
+    private var newStoriesList: [Story] = []
+    private var currentTab: StoryFeedViewModel.FeedTab = .top
     private var cancellables = Set<AnyCancellable>()
+    private weak var loadMoreFooter: LoadMoreFooterView?
 
     private let feedContainerView = UIView()
     private let feedScrimView = UIView()
@@ -26,8 +29,17 @@ final class StoryFeedViewController: UIViewController {
     private let refreshControl = UIRefreshControl()
     private let topBarView = UIView()
     private let topBarTextStack = UIStackView()
-    private let topBarTitleLabel = UILabel()
+    private let tabRow = UIStackView()
+    private let topTabButton = UIButton(type: .system)
+    private let newTabButton = UIButton(type: .system)
+    private let topTabUnderline = UIView()
+    private let newTabUnderline = UIView()
+    private let metaContainer = UIView()
     private let topBarUpdatedLabel = UILabel()
+    private let liveStack = UIStackView()
+    private let liveDot = UIView()
+    private let liveLabel = UILabel()
+    private let newItemsPill = UIButton(type: .system)
     private let offlineButton = OfflineButton()
     private let loadingContainerView = UIView()
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
@@ -128,6 +140,12 @@ final class StoryFeedViewController: UIViewController {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.backgroundColor = AppTheme.Colors.background
         collectionView.register(StoryCell.self, forCellWithReuseIdentifier: StoryCell.reuseIdentifier)
+        collectionView.register(NewStoryCell.self, forCellWithReuseIdentifier: NewStoryCell.reuseIdentifier)
+        collectionView.register(
+            LoadMoreFooterView.self,
+            forSupplementaryViewOfKind: UICollectionView.elementKindSectionFooter,
+            withReuseIdentifier: LoadMoreFooterView.reuseIdentifier
+        )
         collectionView.delegate = self
         collectionView.dataSource = self
         collectionView.alwaysBounceVertical = true
@@ -164,7 +182,53 @@ final class StoryFeedViewController: UIViewController {
             trailing: AppTheme.Metrics.large
         )
         section.interGroupSpacing = AppTheme.Metrics.large
+
+        let footerSize = NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1.0),
+            heightDimension: .estimated(72)
+        )
+        let footer = NSCollectionLayoutBoundarySupplementaryItem(
+            layoutSize: footerSize,
+            elementKind: UICollectionView.elementKindSectionFooter,
+            alignment: .bottom
+        )
+        section.boundarySupplementaryItems = [footer]
+
         return UICollectionViewCompositionalLayout(section: section)
+    }
+
+    /// List-style layout for the New feed: full-width rows with no inter-row
+    /// spacing (each `NewStoryCell` draws its own hairline separator).
+    private func createNewLayout() -> UICollectionViewLayout {
+        let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1.0), heightDimension: .estimated(80))
+        let item = NSCollectionLayoutItem(layoutSize: itemSize)
+        let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
+
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsets = NSDirectionalEdgeInsets(
+            top: AppTheme.Metrics.small,
+            leading: AppTheme.Metrics.medium,
+            bottom: AppTheme.Metrics.medium,
+            trailing: AppTheme.Metrics.medium
+        )
+        section.interGroupSpacing = 0
+
+        let footerSize = NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1.0),
+            heightDimension: .estimated(72)
+        )
+        let footer = NSCollectionLayoutBoundarySupplementaryItem(
+            layoutSize: footerSize,
+            elementKind: UICollectionView.elementKindSectionFooter,
+            alignment: .bottom
+        )
+        section.boundarySupplementaryItems = [footer]
+
+        return UICollectionViewCompositionalLayout(section: section)
+    }
+
+    private func layout(for tab: StoryFeedViewModel.FeedTab) -> UICollectionViewLayout {
+        tab == .top ? createLayout(for: traitCollection) : createNewLayout()
     }
 
     private func setupLoadingView() {
@@ -207,22 +271,37 @@ final class StoryFeedViewController: UIViewController {
     }
 
     private func setupBindings() {
-        // Update snapshot when stories change
+        // Top feed snapshot
         viewModel.$stories
             .receive(on: DispatchQueue.main)
             .sink { [weak self] stories in
                 guard let self = self else { return }
                 self.storyIDs = stories.map { $0.id }
                 self.storiesById = Dictionary(uniqueKeysWithValues: stories.map { ($0.id, $0) })
-                self.applyStoriesSnapshot(stories, animated: self.hasAppliedInitialSnapshot)
+                if self.currentTab == .top {
+                    self.applyStoriesSnapshot(stories, animated: self.hasAppliedInitialSnapshot)
+                }
             }
             .store(in: &cancellables)
 
-        viewModel.$isLoading
+        // New feed snapshot
+        viewModel.$newStories
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] isLoading in
+            .sink { [weak self] stories in
                 guard let self = self else { return }
-                self.updateLoadingState(isLoading: isLoading, hasStories: !self.viewModel.stories.isEmpty)
+                self.newStoriesList = stories
+                if self.currentTab == .new {
+                    self.collectionView.reloadData()
+                    self.updateLoadingStateForCurrentTab()
+                    self.refreshFooterState()
+                }
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest(viewModel.$isLoading, viewModel.$isLoadingNew)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _ in
+                self?.updateLoadingStateForCurrentTab()
             }
             .store(in: &cancellables)
 
@@ -230,6 +309,13 @@ final class StoryFeedViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] refreshing in
                 if !refreshing { self?.refreshControl.endRefreshing() }
+            }
+            .store(in: &cancellables)
+
+        viewModel.$newSinceOpened
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] count in
+                self?.updateNewItemsPill(count: count)
             }
             .store(in: &cancellables)
 
@@ -243,6 +329,159 @@ final class StoryFeedViewController: UIViewController {
             self?.updateOfflineButton(progress: progress, isDownloading: isDownloading, offlineMode: offlineMode)
         }
         .store(in: &cancellables)
+
+        Publishers.CombineLatest4(
+            viewModel.$isLoadingMore,
+            viewModel.$hasMoreStories,
+            viewModel.$isLoadingMoreNew,
+            viewModel.$hasMoreNewStories
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _, _, _, _ in
+            self?.refreshFooterState()
+        }
+        .store(in: &cancellables)
+    }
+
+    private func updateLoadingStateForCurrentTab() {
+        switch currentTab {
+        case .top:
+            updateLoadingState(isLoading: viewModel.isLoading, hasStories: !storyIDs.isEmpty)
+        case .new:
+            updateLoadingState(isLoading: viewModel.isLoadingNew, hasStories: !newStoriesList.isEmpty)
+        }
+    }
+
+    private func refreshFooterState() {
+        switch currentTab {
+        case .top:
+            loadMoreFooter?.apply(isLoading: viewModel.isLoadingMore, hasMore: viewModel.hasMoreStories)
+        case .new:
+            loadMoreFooter?.apply(isLoading: viewModel.isLoadingMoreNew, hasMore: viewModel.hasMoreNewStories)
+        }
+    }
+
+    // MARK: - Tab switching
+
+    @objc private func didTapTopTab() { setActiveTab(.top) }
+    @objc private func didTapNewTab() { setActiveTab(.new) }
+
+    private func setActiveTab(_ tab: StoryFeedViewModel.FeedTab) {
+        guard tab != currentTab else { return }
+        currentTab = tab
+
+        collectionView.setCollectionViewLayout(layout(for: tab), animated: false)
+        collectionView.reloadData()
+        collectionView.setContentOffset(
+            CGPoint(x: 0, y: -collectionView.adjustedContentInset.top),
+            animated: false
+        )
+        setTopBarHidden(false, animated: false)
+        updateTabSelectionUI(animated: true)
+
+        // Show the loading overlay immediately when entering an unpopulated New
+        // feed so we don't flash an empty list before the fetch lands.
+        if tab == .new && newStoriesList.isEmpty {
+            updateLoadingState(isLoading: true, hasStories: false)
+        } else {
+            updateLoadingStateForCurrentTab()
+        }
+
+        refreshFooterState()
+        updateNewItemsPill(count: viewModel.newSinceOpened)
+
+        Task { await viewModel.selectTab(tab) }
+    }
+
+    private func updateTabSelectionUI(animated: Bool) {
+        let isTop = currentTab == .top
+
+        topTabButton.configuration?.baseForegroundColor = isTop ? AppTheme.Colors.primaryText : AppTheme.Colors.tertiaryText
+        newTabButton.configuration?.baseForegroundColor = isTop ? AppTheme.Colors.tertiaryText : AppTheme.Colors.primaryText
+
+        let changes = {
+            self.topTabUnderline.alpha = isTop ? 1 : 0
+            self.newTabUnderline.alpha = isTop ? 0 : 1
+            self.topBarUpdatedLabel.alpha = isTop ? 1 : 0
+            self.liveStack.alpha = isTop ? 0 : 1
+        }
+
+        liveStack.isHidden = false
+
+        if animated {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut, .beginFromCurrentState]) {
+                changes()
+            }
+        } else {
+            changes()
+        }
+
+        if isTop {
+            stopLivePulse()
+        } else {
+            startLivePulse()
+        }
+    }
+
+    private func startLivePulse() {
+        guard liveDot.layer.animation(forKey: "live-pulse") == nil else { return }
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.85
+        scale.toValue = 1.3
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = 1.0
+        opacity.toValue = 0.35
+        let group = CAAnimationGroup()
+        group.animations = [scale, opacity]
+        group.duration = 0.9
+        group.autoreverses = true
+        group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        liveDot.layer.add(group, forKey: "live-pulse")
+    }
+
+    private func stopLivePulse() {
+        liveDot.layer.removeAnimation(forKey: "live-pulse")
+    }
+
+    private func updateNewItemsPill(count: Int) {
+        let shouldShow = currentTab == .new && count > 0
+
+        if shouldShow {
+            let noun = count == 1 ? "item" : "items"
+            newItemsPill.configuration?.title = "\(count) new \(noun) since you opened"
+            newItemsPill.accessibilityLabel = "\(count) new \(noun) since you opened. Tap to view."
+        }
+
+        // Already in the desired visibility state — title update above is enough.
+        let isVisible = !newItemsPill.isHidden
+        guard shouldShow != isVisible else { return }
+
+        if shouldShow {
+            newItemsPill.isHidden = false
+            newItemsPill.transform = CGAffineTransform(translationX: 0, y: -8)
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
+                self.newItemsPill.alpha = 1
+                self.newItemsPill.transform = .identity
+            }
+        } else {
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseIn, .beginFromCurrentState]) {
+                self.newItemsPill.alpha = 0
+                self.newItemsPill.transform = CGAffineTransform(translationX: 0, y: -8)
+            } completion: { _ in
+                self.newItemsPill.isHidden = true
+                self.newItemsPill.transform = .identity
+            }
+        }
+    }
+
+    @objc private func didTapNewItemsPill() {
+        collectionView.setContentOffset(
+            CGPoint(x: 0, y: -collectionView.adjustedContentInset.top),
+            animated: true
+        )
+        setTopBarHidden(false, animated: true)
+        viewModel.acknowledgeNewItems()
     }
 
     private func updateLoadingState(isLoading: Bool, hasStories: Bool) {
@@ -265,13 +504,22 @@ final class StoryFeedViewController: UIViewController {
         topBarTextStack.translatesAutoresizingMaskIntoConstraints = false
         topBarTextStack.axis = .vertical
         topBarTextStack.alignment = .leading
-        topBarTextStack.spacing = 0
+        topBarTextStack.spacing = 4
 
-        topBarTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        topBarTitleLabel.font = AppTheme.Typography.feedHeader
-        topBarTitleLabel.adjustsFontForContentSizeCategory = true
-        topBarTitleLabel.textColor = AppTheme.Colors.primaryText
-        topBarTitleLabel.text = "Top"
+        // Tab switcher (Top / New) — doubles as the large title.
+        tabRow.translatesAutoresizingMaskIntoConstraints = false
+        tabRow.axis = .horizontal
+        tabRow.alignment = .lastBaseline
+        tabRow.spacing = 16
+
+        configureTabButton(topTabButton, title: "Top", underline: topTabUnderline, action: #selector(didTapTopTab))
+        configureTabButton(newTabButton, title: "New", underline: newTabUnderline, action: #selector(didTapNewTab))
+
+        tabRow.addArrangedSubview(topTabButton)
+        tabRow.addArrangedSubview(newTabButton)
+
+        // Meta line — "Updated …" for Top, a live pulse for New.
+        metaContainer.translatesAutoresizingMaskIntoConstraints = false
 
         topBarUpdatedLabel.translatesAutoresizingMaskIntoConstraints = false
         topBarUpdatedLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
@@ -280,16 +528,39 @@ final class StoryFeedViewController: UIViewController {
         topBarUpdatedLabel.textAlignment = .left
         topBarUpdatedLabel.text = "Updated now"
 
+        liveStack.translatesAutoresizingMaskIntoConstraints = false
+        liveStack.axis = .horizontal
+        liveStack.alignment = .center
+        liveStack.spacing = 6
+        liveStack.isHidden = true
+
+        liveDot.translatesAutoresizingMaskIntoConstraints = false
+        liveDot.backgroundColor = AppTheme.Colors.tint
+        liveDot.layer.cornerRadius = 3.5
+
+        liveLabel.font = UIFont.systemFont(ofSize: 12, weight: .medium)
+        liveLabel.adjustsFontForContentSizeCategory = true
+        liveLabel.textColor = AppTheme.Colors.secondaryText
+        liveLabel.text = "Live · newest first"
+
+        liveStack.addArrangedSubview(liveDot)
+        liveStack.addArrangedSubview(liveLabel)
+
+        metaContainer.addSubview(topBarUpdatedLabel)
+        metaContainer.addSubview(liveStack)
+
         offlineButton.translatesAutoresizingMaskIntoConstraints = false
         offlineButton.addTarget(self, action: #selector(didTapOffline), for: .touchUpInside)
         offlineButton.apply(state: .idle, progress: 0, animated: false)
 
-        topBarTextStack.addArrangedSubview(topBarTitleLabel)
-        topBarTextStack.addArrangedSubview(topBarUpdatedLabel)
+        topBarTextStack.addArrangedSubview(tabRow)
+        topBarTextStack.addArrangedSubview(metaContainer)
 
         topBarView.addSubview(topBarTextStack)
         topBarView.addSubview(offlineButton)
         feedContainerView.addSubview(topBarView)
+
+        setupNewItemsPill()
 
         NSLayoutConstraint.activate([
             topBarView.topAnchor.constraint(equalTo: feedContainerView.topAnchor, constant: AppTheme.Metrics.screenTopInset),
@@ -299,13 +570,96 @@ final class StoryFeedViewController: UIViewController {
 
             topBarTextStack.leadingAnchor.constraint(equalTo: topBarView.leadingAnchor, constant: UI.topBarHorizontalInset),
             topBarTextStack.topAnchor.constraint(equalTo: topBarView.topAnchor, constant: 4),
-            topBarTextStack.bottomAnchor.constraint(lessThanOrEqualTo: topBarView.bottomAnchor, constant: -12),
+            topBarTextStack.bottomAnchor.constraint(lessThanOrEqualTo: topBarView.bottomAnchor, constant: -6),
             topBarTextStack.trailingAnchor.constraint(lessThanOrEqualTo: offlineButton.leadingAnchor, constant: -12),
+
+            liveDot.widthAnchor.constraint(equalToConstant: 7),
+            liveDot.heightAnchor.constraint(equalToConstant: 7),
+
+            topBarUpdatedLabel.leadingAnchor.constraint(equalTo: metaContainer.leadingAnchor),
+            topBarUpdatedLabel.trailingAnchor.constraint(lessThanOrEqualTo: metaContainer.trailingAnchor),
+            topBarUpdatedLabel.topAnchor.constraint(equalTo: metaContainer.topAnchor),
+            topBarUpdatedLabel.bottomAnchor.constraint(equalTo: metaContainer.bottomAnchor),
+
+            liveStack.leadingAnchor.constraint(equalTo: metaContainer.leadingAnchor),
+            liveStack.trailingAnchor.constraint(lessThanOrEqualTo: metaContainer.trailingAnchor),
+            liveStack.topAnchor.constraint(equalTo: metaContainer.topAnchor),
+            liveStack.bottomAnchor.constraint(equalTo: metaContainer.bottomAnchor),
 
             offlineButton.trailingAnchor.constraint(equalTo: topBarView.trailingAnchor, constant: -12),
             offlineButton.centerYAnchor.constraint(equalTo: topBarView.centerYAnchor),
             offlineButton.widthAnchor.constraint(equalToConstant: UI.offlineButtonHeight),
             offlineButton.heightAnchor.constraint(equalToConstant: UI.offlineButtonHeight)
+        ])
+
+        updateTabSelectionUI(animated: false)
+    }
+
+    private func configureTabButton(_ button: UIButton, title: String, underline: UIView, action: Selector) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        var config = UIButton.Configuration.plain()
+        config.title = title
+        // Bottom inset reserves room for the underline inside the button's frame
+        // so it tucks under the title rather than spilling onto the meta line.
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0)
+        config.baseForegroundColor = AppTheme.Colors.primaryText
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = AppTheme.Typography.feedHeader
+            return outgoing
+        }
+        button.configuration = config
+        button.addTarget(self, action: action, for: .touchUpInside)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        underline.translatesAutoresizingMaskIntoConstraints = false
+        underline.backgroundColor = AppTheme.Colors.tint
+        underline.layer.cornerRadius = 1.5
+        underline.alpha = 0
+        button.addSubview(underline)
+
+        NSLayoutConstraint.activate([
+            underline.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            underline.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            underline.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -2),
+            underline.heightAnchor.constraint(equalToConstant: 3)
+        ])
+    }
+
+    private func setupNewItemsPill() {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(
+            systemName: "arrow.up",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .bold)
+        )
+        config.imagePlacement = .leading
+        config.imagePadding = 6
+        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 14, bottom: 6, trailing: 14)
+        config.baseForegroundColor = AppTheme.Colors.tint
+        config.background.backgroundColor = AppTheme.Colors.accentSoft
+        config.background.cornerRadius = 999
+        config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var outgoing = incoming
+            outgoing.font = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
+            return outgoing
+        }
+        newItemsPill.configuration = config
+        newItemsPill.translatesAutoresizingMaskIntoConstraints = false
+        newItemsPill.isHidden = true
+        newItemsPill.alpha = 0
+        newItemsPill.layer.shadowColor = UIColor.black.cgColor
+        newItemsPill.layer.shadowOpacity = 0.10
+        newItemsPill.layer.shadowRadius = 8
+        newItemsPill.layer.shadowOffset = CGSize(width: 0, height: 2)
+        newItemsPill.addTarget(self, action: #selector(didTapNewItemsPill), for: .touchUpInside)
+
+        feedContainerView.addSubview(newItemsPill)
+
+        NSLayoutConstraint.activate([
+            newItemsPill.centerXAnchor.constraint(equalTo: feedContainerView.centerXAnchor),
+            newItemsPill.topAnchor.constraint(equalTo: topBarView.bottomAnchor, constant: 8)
         ])
     }
 
@@ -425,7 +779,18 @@ final class StoryFeedViewController: UIViewController {
         }
 
         maximumObservedPullDistance = 0
-        Task { await viewModel.refresh() }
+
+        switch currentTab {
+        case .top:
+            Task { await viewModel.refresh() }
+        case .new:
+            // The New feed is ephemeral (not cached); end the spinner ourselves
+            // once the fresh fetch lands rather than via the isRefreshing flag.
+            Task {
+                await viewModel.refreshNewStories()
+                refreshControl.endRefreshing()
+            }
+        }
     }
 
     @objc private func didTapOffline() {
@@ -451,6 +816,14 @@ final class StoryFeedViewController: UIViewController {
     }
 
     private func updateTopBarTimestamp() {
+        // Under a minute reads as "just now" — the relative formatter would
+        // otherwise render the present moment as "in 0 seconds".
+        let elapsed = Date().timeIntervalSince(lastUpdatedAt)
+        if elapsed < 60 {
+            topBarUpdatedLabel.text = "Updated just now"
+            return
+        }
+
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         topBarUpdatedLabel.text = "Updated \(formatter.localizedString(for: lastUpdatedAt, relativeTo: Date()))"
@@ -482,6 +855,9 @@ final class StoryFeedViewController: UIViewController {
 
     private func presentAISummary(for story: Story) {
         let sheet = AISummarySheetViewController(story: story)
+        sheet.onThemeTapped = { [weak self] in
+            self?.openComments(for: story)
+        }
         present(sheet, animated: false)
     }
 
@@ -570,10 +946,48 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
     }
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        storyIDs.count
+        currentTab == .top ? storyIDs.count : newStoriesList.count
+    }
+
+    func collectionView(
+        _ collectionView: UICollectionView,
+        viewForSupplementaryElementOfKind kind: String,
+        at indexPath: IndexPath
+    ) -> UICollectionReusableView {
+        let footer = collectionView.dequeueReusableSupplementaryView(
+            ofKind: kind,
+            withReuseIdentifier: LoadMoreFooterView.reuseIdentifier,
+            for: indexPath
+        ) as! LoadMoreFooterView
+        footer.onTap = { [weak self] in
+            guard let self = self else { return }
+            Task {
+                switch self.currentTab {
+                case .top: await self.viewModel.loadNextPage()
+                case .new: await self.viewModel.loadNextNewPage()
+                }
+            }
+        }
+        loadMoreFooter = footer
+        refreshFooterState()
+        return footer
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        if currentTab == .new {
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: NewStoryCell.reuseIdentifier, for: indexPath) as! NewStoryCell
+            guard indexPath.item < newStoriesList.count else { return cell }
+            let story = newStoriesList[indexPath.item]
+            cell.configure(
+                with: story,
+                showsSeparator: indexPath.item < newStoriesList.count - 1,
+                onCommentsTap: { [weak self] in
+                    self?.openComments(for: story)
+                }
+            )
+            return cell
+        }
+
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: StoryCell.reuseIdentifier, for: indexPath) as! StoryCell
         let storyId = storyIDs[indexPath.item]
         guard let story = storiesById[storyId] else {
@@ -607,24 +1021,24 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
 
         updateTopBarVisibility(for: scrollView)
 
-        // Save scroll position
-        Task { await CacheManager.shared.saveScrollPosition(scrollView.contentOffset.y) }
-
-        // Trigger load next page when near bottom
-        let threshold: CGFloat = 300
-        let offsetY = scrollView.contentOffset.y
-        let contentHeight = scrollView.contentSize.height
-        let height = scrollView.bounds.size.height
-        if offsetY + height + threshold > contentHeight {
-            Task { await viewModel.loadNextPage() }
+        // Persist scroll position for the Top feed only — the New feed is
+        // ephemeral and restored fresh each launch.
+        if currentTab == .top {
+            Task { await CacheManager.shared.saveScrollPosition(scrollView.contentOffset.y) }
         }
 
         lastScrollOffset = normalizedOffset
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        let storyId = storyIDs[indexPath.item]
-        guard let story = storiesById[storyId], let url = story.url else { return }
+        let story: Story?
+        if currentTab == .new {
+            story = indexPath.item < newStoriesList.count ? newStoriesList[indexPath.item] : nil
+        } else {
+            story = storiesById[storyIDs[indexPath.item]]
+        }
+
+        guard let story, let url = story.url else { return }
         let webVC = WebViewModalViewController(url: url)
         present(webVC, animated: true)
     }

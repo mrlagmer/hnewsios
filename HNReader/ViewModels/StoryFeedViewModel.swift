@@ -10,6 +10,12 @@ import Combine
 
 @MainActor
 class StoryFeedViewModel: ObservableObject {
+    /// Which ranked feed is currently shown in the header tab switcher.
+    enum FeedTab {
+        case top
+        case new
+    }
+
     // MARK: - Published Properties
     @Published var stories: [Story] = []
     @Published var isLoading: Bool = true
@@ -20,18 +26,38 @@ class StoryFeedViewModel: ObservableObject {
     @Published var downloadProgress: (completed: Int, total: Int) = (0, 0)
     @Published var errorMessage: String?
     @Published var lastFetchedAt: Date = Date()
-    
+    @Published var hasMoreStories: Bool = false
+
+    // New feed (`/newest`) state — recency-ordered, loaded lazily the first
+    // time the user switches to the New tab.
+    @Published var feedTab: FeedTab = .top
+    @Published var newStories: [Story] = []
+    @Published var isLoadingNew: Bool = false
+    @Published var isLoadingMoreNew: Bool = false
+    @Published var hasMoreNewStories: Bool = false
+    /// Count of stories that arrived since the New feed was first opened
+    /// (drives the "N new since you opened" pill). Populated on refresh.
+    @Published var newSinceOpened: Int = 0
+
     // MARK: - Services
     private let api = HackerNewsAPI.shared
     private let cache = CacheManager.shared
     private let preloader = WebViewPreloader.shared
     private let imageExtractor = SocialImageExtractor.shared
-    
+
     // MARK: - Private Properties
     private var topStoryIDs: [Int] = []
     private var currentPage: Int = 0
     private let pageSize = 20
     private var cancellables = Set<AnyCancellable>()
+
+    // New feed bookkeeping
+    private var newStoryIDs: [Int] = []
+    private var newCurrentPage: Int = 0
+    private var hasLoadedNew: Bool = false
+    /// Snapshot of every story ID present when the New feed first loaded. Any ID
+    /// fetched later that isn't in here is "new since you opened".
+    private var baselineNewIDs: Set<Int> = []
     
     // MARK: - Initialization
     init() {
@@ -82,10 +108,106 @@ class StoryFeedViewModel: ObservableObject {
         currentPage += 1
         
         await loadPage(currentPage)
-        
+
         isLoadingMore = false
     }
-    
+
+    // MARK: - New Feed (`/newest`)
+
+    /// Switches the active feed tab, lazily loading the New feed the first time
+    /// it's shown.
+    func selectTab(_ tab: FeedTab) async {
+        guard tab != feedTab else { return }
+        feedTab = tab
+
+        if tab == .new && !hasLoadedNew {
+            await loadNewStories()
+        }
+    }
+
+    /// Loads the first page of the newest submissions and establishes the
+    /// baseline against which "new since opened" is measured.
+    func loadNewStories() async {
+        isLoadingNew = true
+        errorMessage = nil
+
+        do {
+            newStoryIDs = try await api.fetchNewStoryIDs()
+            // Everything currently in the feed is the baseline; nothing is
+            // flagged "new" on the very first load.
+            baselineNewIDs = Set(newStoryIDs)
+            newSinceOpened = 0
+            newCurrentPage = 0
+            newStories = []
+            await loadNewPage(0)
+            hasLoadedNew = true
+            isLoadingNew = false
+        } catch {
+            isLoadingNew = false
+            errorMessage = "Failed to load new stories"
+            print("❌ Error loading new stories: \(error)")
+        }
+    }
+
+    /// Loads the next page of the newest submissions.
+    func loadNextNewPage() async {
+        guard !isLoadingMoreNew else { return }
+
+        isLoadingMoreNew = true
+        newCurrentPage += 1
+        await loadNewPage(newCurrentPage)
+        isLoadingMoreNew = false
+    }
+
+    /// Re-fetches the newest submissions, flagging any that arrived since the
+    /// feed was first opened and surfacing their count via `newSinceOpened`.
+    func refreshNewStories() async {
+        do {
+            let freshIDs = try await api.fetchNewStoryIDs()
+            newSinceOpened = freshIDs.filter { !baselineNewIDs.contains($0) }.count
+            newStoryIDs = freshIDs
+            newCurrentPage = 0
+            newStories = []
+            await loadNewPage(0)
+        } catch {
+            errorMessage = "Failed to refresh new stories"
+            print("❌ Error refreshing new stories: \(error)")
+        }
+    }
+
+    /// Acknowledges the freshly arrived items (e.g. after tapping the
+    /// "N new since you opened" pill): folds them into the baseline so they
+    /// stop counting and clears the pill.
+    func acknowledgeNewItems() {
+        baselineNewIDs = Set(newStoryIDs)
+        newSinceOpened = 0
+    }
+
+    /// Loads a page of the New feed. Unlike the Top feed these rows don't need
+    /// a social image or top-comment preview, so we fetch the bare story.
+    private func loadNewPage(_ page: Int) async {
+        let startIndex = page * pageSize
+        let endIndex = min(startIndex + pageSize, newStoryIDs.count)
+
+        guard startIndex < newStoryIDs.count else {
+            hasMoreNewStories = false
+            return
+        }
+
+        let pageStoryIDs = Array(newStoryIDs[startIndex..<endIndex])
+
+        var pageStories: [Story] = []
+        for storyID in pageStoryIDs {
+            if var story = try? await api.fetchStory(id: storyID) {
+                story.isNew = !baselineNewIDs.contains(storyID)
+                pageStories.append(story)
+            }
+        }
+
+        newStories.append(contentsOf: pageStories)
+        hasMoreNewStories = endIndex < newStoryIDs.count
+    }
+
     /// Refreshes the story feed
     func refresh() async {
         isRefreshing = true
@@ -227,6 +349,7 @@ class StoryFeedViewModel: ObservableObject {
         
         // Append to stories array
         stories.append(contentsOf: pageStories)
+        hasMoreStories = endIndex < topStoryIDs.count
 
         try? await cache.saveStories(stories)
         await cache.saveCurrentPage(page)

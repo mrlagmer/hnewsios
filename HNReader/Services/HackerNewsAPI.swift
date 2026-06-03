@@ -34,26 +34,40 @@ actor HackerNewsAPI {
     /// - Returns: Array of story IDs
     /// - Throws: HNError if the request fails
     func fetchTopStoryIDs() async throws -> [Int] {
-        guard let url = URL(string: "\(baseURL)/topstories.json") else {
+        try await fetchStoryIDs(from: "topstories")
+    }
+
+    /// Fetches the list of newest story IDs from Hacker News (`/newest`).
+    /// Recency-ordered, mirroring HN's New page.
+    /// - Returns: Array of story IDs, newest first
+    /// - Throws: HNError if the request fails
+    func fetchNewStoryIDs() async throws -> [Int] {
+        try await fetchStoryIDs(from: "newstories")
+    }
+
+    /// Fetches a list of story IDs from one of HN's ranked endpoints
+    /// (e.g. `topstories`, `newstories`).
+    private func fetchStoryIDs(from endpoint: String) async throws -> [Int] {
+        guard let url = URL(string: "\(baseURL)/\(endpoint).json") else {
             throw HNError.urlInvalid
         }
-        
+
         do {
             let (data, response) = try await session.data(from: url)
-            
+
             // Validate HTTP response
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HNError.invalidResponse
             }
-            
+
             guard (200...299).contains(httpResponse.statusCode) else {
                 throw HNError.invalidResponse
             }
-            
+
             // Decode JSON array of integers
             let storyIDs = try JSONDecoder().decode([Int].self, from: data)
             return storyIDs
-            
+
         } catch is DecodingError {
             throw HNError.decodingFailed
         } catch is URLError {

@@ -22,6 +22,10 @@ struct Story: Codable, Identifiable {
     var socialImageURL: URL?
     var allComments: [Comment]?
 
+    /// Set on the "New" feed for items that arrived since the feed was first
+    /// opened. Purely transient — never decoded from or encoded to the API/cache.
+    var isNew: Bool = false
+
     // Validation
     var isValid: Bool {
         !title.isEmpty && id > 0

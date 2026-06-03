@@ -107,7 +107,11 @@ actor AISummaryService {
                 return generationError.localizedDescription
             }
         }
-        return error.localizedDescription
+        let desc = error.localizedDescription
+        if desc.localizedCaseInsensitiveContains("unsafe") || desc.localizedCaseInsensitiveContains("guardrail") {
+            return "Apple Intelligence's safety filter blocked this thread. This can happen with some technical or edgy HN discussions — it's an Apple AI limitation, not a problem with the app."
+        }
+        return desc
     }
 
     private func fetchCommentsForSummary(storyId: Int) async throws -> [Comment] {

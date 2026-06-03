@@ -20,7 +20,7 @@ final class CommentCell: UITableViewCell {
     private let metaDotLabel = UILabel()
     private let timeLabel = UILabel()
     private let collapseButton = UIButton(type: .system)
-    private let commentTextLabel = UILabel()
+    private let commentTextView = UITextView()
     private let actionRow = UIStackView()
     private let upvoteButton = UIButton(type: .system)
     private let replyButton = UIButton(type: .system)
@@ -44,7 +44,7 @@ final class CommentCell: UITableViewCell {
         super.prepareForReuse()
         authorLabel.text = nil
         timeLabel.text = nil
-        commentTextLabel.attributedText = nil
+        commentTextView.attributedText = nil
         opBadgeLabel.isHidden = true
         collapseButton.isHidden = true
         headerTapButton.isHidden = true
@@ -123,11 +123,21 @@ final class CommentCell: UITableViewCell {
         collapseButton.addTarget(self, action: #selector(toggleThread), for: .touchUpInside)
         collapseButton.isHidden = true
 
-        commentTextLabel.translatesAutoresizingMaskIntoConstraints = false
-        commentTextLabel.numberOfLines = 0
-        commentTextLabel.font = AppTheme.Typography.commentBody
-        commentTextLabel.adjustsFontForContentSizeCategory = true
-        commentTextLabel.textColor = AppTheme.Colors.primaryText
+        commentTextView.translatesAutoresizingMaskIntoConstraints = false
+        commentTextView.isEditable = false
+        commentTextView.isScrollEnabled = false
+        commentTextView.backgroundColor = .clear
+        commentTextView.textContainerInset = .zero
+        commentTextView.textContainer.lineFragmentPadding = 0
+        commentTextView.font = AppTheme.Typography.commentBody
+        commentTextView.adjustsFontForContentSizeCategory = true
+        commentTextView.textColor = AppTheme.Colors.primaryText
+        commentTextView.dataDetectorTypes = []
+        commentTextView.linkTextAttributes = [
+            .foregroundColor: AppTheme.Colors.tint,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
+        commentTextView.delegate = self
 
         actionRow.translatesAutoresizingMaskIntoConstraints = false
         actionRow.axis = .horizontal
@@ -156,7 +166,7 @@ final class CommentCell: UITableViewCell {
         actionRow.addArrangedSubview(moreButton)
 
         verticalStack.addArrangedSubview(headerRow)
-        verticalStack.addArrangedSubview(commentTextLabel)
+        verticalStack.addArrangedSubview(commentTextView)
         verticalStack.addArrangedSubview(actionRow)
 
         headerTapButton.translatesAutoresizingMaskIntoConstraints = false
@@ -233,7 +243,7 @@ final class CommentCell: UITableViewCell {
         railView.backgroundColor = node.isCollapsed ? AppTheme.Colors.tint : AppTheme.Colors.rail
 
         if node.isCollapsed {
-            commentTextLabel.isHidden = true
+            commentTextView.isHidden = true
             actionRow.isHidden = true
             collapseButton.backgroundColor = AppTheme.Colors.accentSoft
             collapseButton.layer.cornerRadius = 999
@@ -245,9 +255,9 @@ final class CommentCell: UITableViewCell {
             collapseButton.semanticContentAttribute = .forceRightToLeft
             collapseButton.imageEdgeInsets = UIEdgeInsets(top: 0, left: 4, bottom: 0, right: -4)
         } else {
-            commentTextLabel.isHidden = false
+            commentTextView.isHidden = false
             actionRow.isHidden = false
-            commentTextLabel.attributedText = renderHTMLText(node.comment.text ?? "[deleted]")
+            commentTextView.attributedText = renderHTMLText(node.comment.text ?? "[deleted]")
             collapseButton.backgroundColor = .clear
             collapseButton.layer.cornerRadius = 0
             collapseButton.contentEdgeInsets = .zero
@@ -258,17 +268,26 @@ final class CommentCell: UITableViewCell {
         }
     }
 
-    func renderHTMLText(_ html: String) -> NSAttributedString? {
-        let text = HTMLTextExtractor.plainText(from: html)
+    func renderHTMLText(_ html: String) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 6
         paragraph.paragraphSpacing = 12
 
-        return NSAttributedString(string: text, attributes: [
+        let baseAttributes: [NSAttributedString.Key: Any] = [
             .font: AppTheme.Typography.commentBody,
             .paragraphStyle: paragraph,
             .foregroundColor: AppTheme.Colors.primaryText
-        ])
+        ]
+
+        // linkTextAttributes on the text view supplies colour/underline; we only
+        // need to mark the link range itself here (via the `.link` key set inside
+        // HTMLTextExtractor.attributedText). Pass an empty dict for additional
+        // per-link attributes.
+        return HTMLTextExtractor.attributedText(
+            from: html,
+            baseAttributes: baseAttributes,
+            linkAttributes: [:]
+        )
     }
 
     private func configureActionButton(_ button: UIButton, title: String?, imageName: String) {
@@ -309,5 +328,20 @@ final class CommentCell: UITableViewCell {
 
     @objc private func toggleThread() {
         onToggle?()
+    }
+}
+
+extension CommentCell: UITextViewDelegate {
+    func textView(
+        _ textView: UITextView,
+        primaryActionFor textItem: UITextItem,
+        defaultAction: UIAction
+    ) -> UIAction? {
+        if case let .link(url) = textItem.content {
+            return UIAction { _ in
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+        }
+        return defaultAction
     }
 }

@@ -63,12 +63,10 @@ class CommentsViewModel: ObservableObject {
             // Determine slice for initial load
             let slice = Array(topLevelIDs.prefix(topLevelBatchSize))
 
-            // Fetch comments for these top-level IDs (includes nested replies)
-            var allComments: [Comment] = []
-            for id in slice {
-                let fetched = try await api.fetchComments(ids: [id])
-                allComments.append(contentsOf: fetched)
-            }
+            // Fetch comments for these top-level IDs (includes nested replies).
+            // Passing the full slice lets HackerNewsAPI parallelize up to its
+            // maxParallelRequests limit; awaiting one ID at a time forces serial fetches.
+            let allComments = try await api.fetchComments(ids: slice)
 
             // Save to cache
             try await cache.saveStoryComments(storyId: storyId, comments: allComments)
@@ -113,11 +111,7 @@ class CommentsViewModel: ObservableObject {
             let end = min(start + topLevelBatchSize, topLevelIDs.count)
             let slice = Array(topLevelIDs[start..<end])
 
-            var newComments: [Comment] = []
-            for id in slice {
-                let fetched = try await api.fetchComments(ids: [id])
-                newComments.append(contentsOf: fetched)
-            }
+            let newComments = try await api.fetchComments(ids: slice)
 
             // Merge with existing flattened comments then rebuild tree to dedupe
             // Retrieve existing flattened comments by flattening current tree
@@ -140,32 +134,38 @@ class CommentsViewModel: ObservableObject {
     }
 
     func buildCommentTree(from comments: [Comment]) -> [CommentNode] {
-        var map: [Int: CommentNode] = [:]
+        // Index comments by id, and group child ids by parent id. We can't build
+        // the tree by mutating CommentNodes in a dictionary because CommentNode is
+        // a value type — appending children to `map[parentId]` mutates a copy, so
+        // grandchildren attached after their parent has already been wired into
+        // its own parent would be silently dropped (the symptom: deep threads
+        // appearing only one level deep).
+        var commentsById: [Int: Comment] = [:]
+        var childIdsByParent: [Int: [Int]] = [:]
 
-        // Create nodes for valid comments
         for comment in comments where comment.isValid {
-            map[comment.id] = CommentNode(comment: comment, children: [])
+            commentsById[comment.id] = comment
+            childIdsByParent[comment.parent, default: []].append(comment.id)
         }
 
-        // Attach children to parents
-        for node in map.values {
-            let parentId = node.comment.parent
-            if parentId == storyId {
-                // top-level, will be root
-                continue
-            }
-            if var parentNode = map[parentId] {
-                parentNode.children.append(node)
-                map[parentId] = parentNode
-            }
+        // Recursively materialize CommentNodes, sorting children by time ascending
+        // (oldest reply first) which matches HN's display order within a thread.
+        func makeNode(for id: Int) -> CommentNode? {
+            guard let comment = commentsById[id] else { return nil }
+            let childIds = childIdsByParent[id] ?? []
+            let children = childIds
+                .compactMap { commentsById[$0] }
+                .sorted { ($0.time ?? 0) < ($1.time ?? 0) }
+                .compactMap { makeNode(for: $0.id) }
+            return CommentNode(comment: comment, children: children)
         }
 
-        // Roots are comments whose parent == storyId
-        let roots = map.values.filter { $0.comment.parent == storyId }
+        let rootIds = childIdsByParent[storyId] ?? []
+        let roots = rootIds.compactMap { makeNode(for: $0) }
 
-        // Preserve original order by comment time (descending recent first)
-        let sortedRoots = roots.sorted { ($0.comment.time ?? 0) > ($1.comment.time ?? 0) }
-        return sortedRoots
+        // Default ordering for roots: newest top-level comment first. The view
+        // controller re-sorts roots per the user's SortOption.
+        return roots.sorted { ($0.comment.time ?? 0) > ($1.comment.time ?? 0) }
     }
 
     func toggleCollapse(nodeId: Int) {
