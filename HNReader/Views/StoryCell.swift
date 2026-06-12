@@ -149,6 +149,16 @@ enum HTMLTextExtractor {
     }
 }
 
+/// Remembers the outcome of each social-image fetch so a card is only ever
+/// loaded (and measured) once. Without this, every dequeue re-fetches: failing
+/// images would re-fail and re-trigger a layout pass on every scroll, which
+/// fights the user's scrolling. Touched only from the main actor.
+@MainActor
+private enum SocialImageCache {
+    static let images = NSCache<NSURL, UIImage>()
+    static var failedURLs = Set<URL>()
+}
+
 final class StoryCell: UICollectionViewCell {
     static let reuseIdentifier = "StoryCell"
 
@@ -175,6 +185,17 @@ final class StoryCell: UICollectionViewCell {
     private let loadingIndicator = UIActivityIndicatorView(style: .medium)
 
     private var imageLoadTask: Task<Void, Never>?
+
+    /// Invoked when the reserved image slot is collapsed *after* the cell was
+    /// already measured (i.e. the image failed to load). The feed wires this up
+    /// to re-measure just this cell, otherwise the card keeps its image-inclusive
+    /// height and Auto Layout leaves a large empty gap.
+    var onImageDidHide: (() -> Void)?
+
+    /// Invoked when the user taps the title or the preview image — the only two
+    /// regions that open the story URL. Tapping elsewhere on the card (notably
+    /// the top-comment quote) must not open the URL.
+    var onStoryTap: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -240,6 +261,8 @@ final class StoryCell: UICollectionViewCell {
         loadingIndicator.stopAnimating()
         imageLoadTask?.cancel()
         imageLoadTask = nil
+        onImageDidHide = nil
+        onStoryTap = nil
         aiSummaryButton.removeTarget(nil, action: nil, for: .allEvents)
         aiSummaryButton.isHidden = true
     }
@@ -282,6 +305,8 @@ final class StoryCell: UICollectionViewCell {
         titleLabel.font = AppTheme.Typography.storyHeadline
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = AppTheme.Colors.primaryText
+        titleLabel.isUserInteractionEnabled = true
+        titleLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleStoryTap)))
 
         socialImageContainer.translatesAutoresizingMaskIntoConstraints = false
         socialImageContainer.backgroundColor = AppTheme.Colors.surfaceAlt
@@ -294,6 +319,8 @@ final class StoryCell: UICollectionViewCell {
         socialImageView.contentMode = .scaleAspectFill
         socialImageView.clipsToBounds = true
         socialImageView.accessibilityLabel = "Story preview image"
+        socialImageView.isUserInteractionEnabled = true
+        socialImageView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleStoryTap)))
 
         // Top comment quote block
         topCommentView.translatesAutoresizingMaskIntoConstraints = false
@@ -490,11 +517,18 @@ final class StoryCell: UICollectionViewCell {
         ])
     }
 
+    @objc private func handleStoryTap() {
+        onStoryTap?()
+    }
+
     func configure(
         with story: Story,
         onCommentsTap: (() -> Void)? = nil,
-        onAISummaryTap: (() -> Void)? = nil
+        onAISummaryTap: (() -> Void)? = nil,
+        onStoryTap: (() -> Void)? = nil
     ) {
+        self.onStoryTap = onStoryTap
+
         titleLabel.text = story.title
         domainLabel.text = formattedDomain(from: story.url)
         ageLabel.text = formatTime(timestamp: story.time)
@@ -537,15 +571,23 @@ final class StoryCell: UICollectionViewCell {
             topCommentView.isHidden = true
         }
 
-        if let url = story.socialImageURL {
+        if let url = story.socialImageURL, !SocialImageCache.failedURLs.contains(url) {
             // Reserve the image's slot up front so the cell measures with the
             // 168pt image height baked in. If we wait for the image to load and
             // unhide later, the image's required-priority height constraint
             // compresses the multi-line labels to zero on the next layout pass.
+            //
+            // A URL we already know fails is treated as "no image" above, so the
+            // cell measures small from the start — no reserved gap, no re-layout.
             socialImageContainer.isHidden = false
             socialImageView.isHidden = false
-            loadingIndicator.startAnimating()
-            loadSocialImage(from: url)
+            if let cached = SocialImageCache.images.object(forKey: url as NSURL) {
+                socialImageView.image = cached
+                loadingIndicator.stopAnimating()
+            } else {
+                loadingIndicator.startAnimating()
+                loadSocialImage(from: url)
+            }
         } else {
             socialImageContainer.isHidden = true
             socialImageView.isHidden = true
@@ -594,22 +636,33 @@ final class StoryCell: UICollectionViewCell {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 guard !Task.isCancelled else { return }
                 guard let image = UIImage(data: data) else {
-                    await MainActor.run {
-                        self?.socialImageContainer.isHidden = true
-                        self?.loadingIndicator.stopAnimating()
-                    }
+                    await self?.collapseSocialImage(for: url)
                     return
                 }
                 await MainActor.run {
+                    SocialImageCache.images.setObject(image, forKey: url as NSURL)
                     self?.socialImageView.image = image
                     self?.loadingIndicator.stopAnimating()
                 }
             } catch {
-                await MainActor.run {
-                    self?.socialImageContainer.isHidden = true
-                    self?.loadingIndicator.stopAnimating()
-                }
+                // A cancelled task means the cell was reused; leave its new
+                // content untouched rather than collapsing the recycled image.
+                guard !Task.isCancelled else { return }
+                await self?.collapseSocialImage(for: url)
             }
         }
+    }
+
+    /// Record the failure, hide the reserved image slot, and ask the feed to
+    /// re-measure this cell so the card shrinks to fit instead of leaving a gap.
+    /// Caching the failure means subsequent appearances skip the slot entirely,
+    /// so this re-measure happens at most once per URL.
+    @MainActor
+    private func collapseSocialImage(for url: URL) {
+        SocialImageCache.failedURLs.insert(url)
+        socialImageContainer.isHidden = true
+        socialImageView.isHidden = true
+        loadingIndicator.stopAnimating()
+        onImageDidHide?()
     }
 }

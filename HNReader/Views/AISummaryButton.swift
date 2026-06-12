@@ -20,7 +20,7 @@ final class AISummaryButton: UIButton {
     private func setup() {
         translatesAutoresizingMaskIntoConstraints = false
         accessibilityLabel = "AI summary"
-        accessibilityHint = "Summarise the comments using Apple Intelligence."
+        accessibilityHint = "Summarise the linked article using Apple Intelligence."
 
         var config = UIButton.Configuration.plain()
         config.title = "AI summary"

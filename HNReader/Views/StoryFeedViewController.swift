@@ -41,6 +41,7 @@ final class StoryFeedViewController: UIViewController {
     private let liveLabel = UILabel()
     private let newItemsPill = UIButton(type: .system)
     private let offlineButton = OfflineButton()
+    private let topBarBlurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let loadingContainerView = UIView()
     private let loadingIndicator = UIActivityIndicatorView(style: .large)
     private let loadingLabel = UILabel()
@@ -498,8 +499,10 @@ final class StoryFeedViewController: UIViewController {
 
     private func setupTopBar() {
         topBarView.translatesAutoresizingMaskIntoConstraints = false
-        topBarView.backgroundColor = AppTheme.Colors.background.withAlphaComponent(0.96)
+        topBarView.backgroundColor = .clear
         topBarView.isUserInteractionEnabled = true
+
+        topBarBlurView.translatesAutoresizingMaskIntoConstraints = false
 
         topBarTextStack.translatesAutoresizingMaskIntoConstraints = false
         topBarTextStack.axis = .vertical
@@ -562,7 +565,16 @@ final class StoryFeedViewController: UIViewController {
 
         setupNewItemsPill()
 
+        // Blur spans from the very top of the screen through the bar bottom so
+        // the status-bar region also gets the glass treatment.
+        feedContainerView.insertSubview(topBarBlurView, belowSubview: topBarView)
+
         NSLayoutConstraint.activate([
+            topBarBlurView.topAnchor.constraint(equalTo: feedContainerView.topAnchor),
+            topBarBlurView.leadingAnchor.constraint(equalTo: feedContainerView.leadingAnchor),
+            topBarBlurView.trailingAnchor.constraint(equalTo: feedContainerView.trailingAnchor),
+            topBarBlurView.bottomAnchor.constraint(equalTo: topBarView.bottomAnchor),
+
             topBarView.topAnchor.constraint(equalTo: feedContainerView.topAnchor, constant: AppTheme.Metrics.screenTopInset),
             topBarView.leadingAnchor.constraint(equalTo: feedContainerView.leadingAnchor),
             topBarView.trailingAnchor.constraint(equalTo: feedContainerView.trailingAnchor),
@@ -678,6 +690,8 @@ final class StoryFeedViewController: UIViewController {
         let changes = {
             self.topBarView.transform = targetTransform
             self.topBarView.alpha = hidden ? 0 : 1
+            self.topBarBlurView.transform = targetTransform
+            self.topBarBlurView.alpha = hidden ? 0 : 1
             self.collectionView.scrollIndicatorInsets = hidden ? hiddenIndicatorInsets : visibleIndicatorInsets
         }
 
@@ -855,9 +869,6 @@ final class StoryFeedViewController: UIViewController {
 
     private func presentAISummary(for story: Story) {
         let sheet = AISummarySheetViewController(story: story)
-        sheet.onThemeTapped = { [weak self] in
-            self?.openComments(for: story)
-        }
         present(sheet, animated: false)
     }
 
@@ -1001,8 +1012,25 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
             },
             onAISummaryTap: { [weak self] in
                 self?.presentAISummary(for: story)
+            },
+            onStoryTap: { [weak self] in
+                self?.openStory(story)
             }
         )
+
+        // The cell reserves the image slot before the image loads; if the load
+        // fails it collapses the slot and asks us to re-measure just that item
+        // so the card shrinks instead of leaving a gap. We invalidate only the
+        // one item (not the whole layout, and not via `performBatchUpdates`,
+        // which drops the boundary supplementary footer). The failure is cached,
+        // so this fires at most once per image URL — never a per-scroll storm.
+        cell.onImageDidHide = { [weak self, weak cell] in
+            guard let self, let cell,
+                  let indexPath = self.collectionView.indexPath(for: cell) else { return }
+            let context = UICollectionViewLayoutInvalidationContext()
+            context.invalidateItems(at: [indexPath])
+            self.collectionView.collectionViewLayout.invalidateLayout(with: context)
+        }
 
         return cell
     }
@@ -1031,14 +1059,17 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        let story: Story?
-        if currentTab == .new {
-            story = indexPath.item < newStoriesList.count ? newStoriesList[indexPath.item] : nil
-        } else {
-            story = storiesById[storyIDs[indexPath.item]]
-        }
+        // On the Top feed the URL only opens from taps on the story title or
+        // preview image (wired per-cell via `onStoryTap`), so whole-cell
+        // selection is a no-op there. The New feed has no such regions, so a
+        // row tap opens the story directly.
+        guard currentTab == .new,
+              indexPath.item < newStoriesList.count else { return }
+        openStory(newStoriesList[indexPath.item])
+    }
 
-        guard let story, let url = story.url else { return }
+    private func openStory(_ story: Story) {
+        guard let url = story.url else { return }
         let webVC = WebViewModalViewController(url: url)
         present(webVC, animated: true)
     }

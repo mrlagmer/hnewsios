@@ -13,6 +13,7 @@ struct Story: Codable, Identifiable {
     let score: Int
     let descendants: Int  // Comment count
     let url: String?
+    let text: String?     // Self-post body HTML (Ask HN / Show HN / text posts)
     let by: String?
     let time: Int
     let kids: [Int]?      // Top-level comment IDs
@@ -32,16 +33,17 @@ struct Story: Codable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, score, descendants, url, by, time, kids, deleted, dead
+        case id, title, score, descendants, url, text, by, time, kids, deleted, dead
         case topComment, socialImageURL
     }
 
-    init(id: Int, title: String, score: Int, descendants: Int, url: String?, by: String?, time: Int, kids: [Int]?) {
+    init(id: Int, title: String, score: Int, descendants: Int, url: String?, by: String?, time: Int, kids: [Int]?, text: String? = nil) {
         self.id = id
         self.title = title
         self.score = score
         self.descendants = descendants
         self.url = url
+        self.text = text
         self.by = by
         self.time = time
         self.kids = kids
@@ -69,6 +71,7 @@ struct Story: Codable, Identifiable {
         self.score = try container.decodeIfPresent(Int.self, forKey: .score) ?? 0
         self.descendants = try container.decodeIfPresent(Int.self, forKey: .descendants) ?? 0
         self.url = try container.decodeIfPresent(String.self, forKey: .url)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.by = try container.decodeIfPresent(String.self, forKey: .by)
         self.time = try container.decodeIfPresent(Int.self, forKey: .time) ?? 0
         self.kids = try container.decodeIfPresent([Int].self, forKey: .kids)
@@ -83,6 +86,7 @@ struct Story: Codable, Identifiable {
         try container.encode(score, forKey: .score)
         try container.encode(descendants, forKey: .descendants)
         try container.encodeIfPresent(url, forKey: .url)
+        try container.encodeIfPresent(text, forKey: .text)
         try container.encodeIfPresent(by, forKey: .by)
         try container.encode(time, forKey: .time)
         try container.encodeIfPresent(kids, forKey: .kids)

@@ -31,8 +31,6 @@ final class AISummarySheetViewController: UIViewController {
     private let bodyStack = UIStackView()
     private let skeletonView = AISummarySkeletonView()
 
-    var onThemeTapped: (() -> Void)?
-
     private var sheetBottomConstraint: NSLayoutConstraint!
 
     init(story: Story) {
@@ -263,15 +261,6 @@ final class AISummarySheetViewController: UIViewController {
         }
     }
 
-    @objc private func themeTapped() {
-        loadTask?.cancel()
-        animateSheetOut { [weak self] in
-            self?.dismiss(animated: false) {
-                self?.onThemeTapped?()
-            }
-        }
-    }
-
     private func runGeneration() async {
         do {
             let summary = try await AISummaryService.shared.summarise(story: story)
@@ -290,13 +279,13 @@ final class AISummarySheetViewController: UIViewController {
 
         switch displayState {
         case .loading:
-            subtitleLabel.text = "Reading the thread…"
+            subtitleLabel.text = "Reading the article…"
             bodyStack.addArrangedSubview(skeletonView)
             skeletonView.startShimmer()
 
         case .ready(let summary):
             skeletonView.stopShimmer()
-            subtitleLabel.text = "Synthesised from \(story.descendants) comments"
+            subtitleLabel.text = readySubtitle
             populate(with: summary)
             if animated {
                 bodyStack.alpha = 0
@@ -314,24 +303,26 @@ final class AISummarySheetViewController: UIViewController {
         }
     }
 
+    private var readySubtitle: String {
+        if let urlString = story.url,
+           let host = URL(string: urlString)?.host?.replacingOccurrences(of: "www.", with: ""),
+           !host.isEmpty {
+            return "Summarised from \(host)"
+        }
+        return "Summarised from the post"
+    }
+
     private func populate(with summary: AISummary) {
         bodyStack.addArrangedSubview(makeSection(label: "TL;DR", body: makeTLDR(text: summary.tldr)))
 
-        let sentimentBar = SentimentBarView(
-            supportive: summary.supportivePercent,
-            neutral: summary.neutralPercent,
-            skeptical: summary.skepticalPercent
-        )
-        bodyStack.addArrangedSubview(makeSection(label: "Sentiment", body: sentimentBar))
-
-        let themesStack = UIStackView()
-        themesStack.axis = .vertical
-        themesStack.spacing = 12
-        themesStack.translatesAutoresizingMaskIntoConstraints = false
-        for (index, theme) in summary.themes.enumerated() {
-            themesStack.addArrangedSubview(makeThemeRow(index: index + 1, theme: theme))
+        let pointsStack = UIStackView()
+        pointsStack.axis = .vertical
+        pointsStack.spacing = 10
+        pointsStack.translatesAutoresizingMaskIntoConstraints = false
+        for point in summary.keyPoints {
+            pointsStack.addArrangedSubview(makeKeyPointRow(text: point))
         }
-        bodyStack.addArrangedSubview(makeSection(label: "Main threads", body: themesStack))
+        bodyStack.addArrangedSubview(makeSection(label: "Key points", body: pointsStack))
 
         bodyStack.addArrangedSubview(makeDisclaimer())
     }
@@ -391,104 +382,46 @@ final class AISummarySheetViewController: UIViewController {
         return label
     }
 
-    private func makeThemeRow(index: Int, theme: AISummary.Theme) -> UIView {
-        let button = UIButton(type: .custom)
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.backgroundColor = AppTheme.Colors.surfaceAlt
-        button.layer.cornerRadius = 10
-        button.layer.cornerCurve = .continuous
-        button.clipsToBounds = true
-        button.addTarget(self, action: #selector(themeTapped), for: .touchUpInside)
-        button.configurationUpdateHandler = { btn in
-            UIView.animate(withDuration: 0.1) {
-                btn.alpha = btn.isHighlighted ? 0.6 : 1.0
-            }
-        }
+    private func makeKeyPointRow(text: String) -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
 
-        let badge = UILabel()
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        badge.text = "\(index)"
-        badge.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)
-        badge.textColor = AppTheme.Colors.tint
-        badge.textAlignment = .center
-        badge.backgroundColor = AppTheme.Colors.accentSoft
-        badge.layer.cornerRadius = 6
-        badge.layer.cornerCurve = .continuous
-        badge.layer.masksToBounds = true
+        let dot = UIView()
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.backgroundColor = AppTheme.Colors.tint
+        dot.layer.cornerRadius = 3
 
-        let labelRow = UIStackView()
-        labelRow.translatesAutoresizingMaskIntoConstraints = false
-        labelRow.axis = .horizontal
-        labelRow.spacing = 8
-        labelRow.alignment = .firstBaseline
-
-        let labelView = UILabel()
-        labelView.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        labelView.textColor = AppTheme.Colors.primaryText
-        labelView.numberOfLines = 0
-        labelView.text = theme.label
-
-        let countView = UILabel()
-        countView.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        countView.textColor = AppTheme.Colors.tertiaryText
-        countView.text = "\(theme.replyCount) replies"
-        countView.setContentHuggingPriority(.required, for: .horizontal)
-        countView.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        labelRow.addArrangedSubview(labelView)
-        labelRow.addArrangedSubview(countView)
-
-        let bodyLabel = UILabel()
-        bodyLabel.numberOfLines = 0
-        bodyLabel.font = UIFont.systemFont(ofSize: 13.5, weight: .regular)
-        bodyLabel.textColor = AppTheme.Colors.secondaryText
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.numberOfLines = 0
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 3
-        bodyLabel.attributedText = NSAttributedString(
-            string: theme.body,
+        label.attributedText = NSAttributedString(
+            string: text,
             attributes: [
-                .font: UIFont.systemFont(ofSize: 13.5, weight: .regular),
-                .foregroundColor: AppTheme.Colors.secondaryText,
+                .font: UIFont.systemFont(ofSize: 14.5, weight: .regular),
+                .foregroundColor: AppTheme.Colors.primaryText,
                 .paragraphStyle: paragraph
             ]
         )
 
-        let textStack = UIStackView(arrangedSubviews: [labelRow, bodyLabel])
-        textStack.translatesAutoresizingMaskIntoConstraints = false
-        textStack.axis = .vertical
-        textStack.spacing = 2
-        textStack.isUserInteractionEnabled = false
-
-        let chevron = UIImageView(image: UIImage(
-            systemName: "chevron.right",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-        ))
-        chevron.translatesAutoresizingMaskIntoConstraints = false
-        chevron.tintColor = AppTheme.Colors.tertiaryText
-        chevron.contentMode = .scaleAspectFit
-        chevron.isUserInteractionEnabled = false
-
-        button.addSubview(badge)
-        button.addSubview(textStack)
-        button.addSubview(chevron)
+        container.addSubview(dot)
+        container.addSubview(label)
 
         NSLayoutConstraint.activate([
-            badge.topAnchor.constraint(equalTo: button.topAnchor, constant: 12),
-            badge.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 12),
-            badge.widthAnchor.constraint(equalToConstant: 22),
-            badge.heightAnchor.constraint(equalToConstant: 22),
+            // Nudge the dot down so it sits on the first text line.
+            dot.topAnchor.constraint(equalTo: container.topAnchor, constant: 7),
+            dot.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 2),
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
 
-            chevron.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            chevron.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -14),
-            chevron.widthAnchor.constraint(equalToConstant: 8),
-
-            textStack.topAnchor.constraint(equalTo: button.topAnchor, constant: 10),
-            textStack.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10),
-            textStack.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -10),
-            textStack.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -12)
+            label.topAnchor.constraint(equalTo: container.topAnchor),
+            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
-        return button
+        return container
     }
 
     private func makeDisclaimer() -> UIView {
@@ -506,7 +439,7 @@ final class AISummarySheetViewController: UIViewController {
 
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.text = "AI-generated on-device. Summaries can miss nuance — tap a thread to read it."
+        label.text = "AI-generated on-device from the article text. Summaries can miss nuance — open the story to read it in full."
         label.font = UIFont.systemFont(ofSize: 11, weight: .regular)
         label.textColor = AppTheme.Colors.tertiaryText
         label.numberOfLines = 0
@@ -572,114 +505,6 @@ final class AISummarySheetViewController: UIViewController {
     }
 }
 
-// MARK: - Sentiment bar
-
-final class SentimentBarView: UIView {
-    init(supportive: Int, neutral: Int, skeptical: Int) {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        configure(supportive: supportive, neutral: neutral, skeptical: skeptical)
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func configure(supportive: Int, neutral: Int, skeptical: Int) {
-        let track = UIView()
-        track.translatesAutoresizingMaskIntoConstraints = false
-        track.backgroundColor = AppTheme.Colors.surfaceAlt
-        track.layer.cornerRadius = 4
-        track.clipsToBounds = true
-        addSubview(track)
-
-        let supportSegment = UIView()
-        let neutralSegment = UIView()
-        let skepticalSegment = UIView()
-
-        supportSegment.translatesAutoresizingMaskIntoConstraints = false
-        neutralSegment.translatesAutoresizingMaskIntoConstraints = false
-        skepticalSegment.translatesAutoresizingMaskIntoConstraints = false
-
-        supportSegment.backgroundColor = AppTheme.Colors.tint.withAlphaComponent(0.55)
-        neutralSegment.backgroundColor = AppTheme.Colors.border
-        skepticalSegment.backgroundColor = AppTheme.Colors.tint
-
-        track.addSubview(supportSegment)
-        track.addSubview(neutralSegment)
-        track.addSubview(skepticalSegment)
-
-        let total = max(1, supportive + neutral + skeptical)
-        let supportFrac = CGFloat(supportive) / CGFloat(total)
-        let neutralFrac = CGFloat(neutral) / CGFloat(total)
-        let skepticalFrac = CGFloat(skeptical) / CGFloat(total)
-
-        NSLayoutConstraint.activate([
-            track.topAnchor.constraint(equalTo: topAnchor),
-            track.leadingAnchor.constraint(equalTo: leadingAnchor),
-            track.trailingAnchor.constraint(equalTo: trailingAnchor),
-            track.heightAnchor.constraint(equalToConstant: 8),
-
-            supportSegment.leadingAnchor.constraint(equalTo: track.leadingAnchor),
-            supportSegment.topAnchor.constraint(equalTo: track.topAnchor),
-            supportSegment.bottomAnchor.constraint(equalTo: track.bottomAnchor),
-            supportSegment.widthAnchor.constraint(equalTo: track.widthAnchor, multiplier: supportFrac),
-
-            neutralSegment.leadingAnchor.constraint(equalTo: supportSegment.trailingAnchor),
-            neutralSegment.topAnchor.constraint(equalTo: track.topAnchor),
-            neutralSegment.bottomAnchor.constraint(equalTo: track.bottomAnchor),
-            neutralSegment.widthAnchor.constraint(equalTo: track.widthAnchor, multiplier: neutralFrac),
-
-            skepticalSegment.leadingAnchor.constraint(equalTo: neutralSegment.trailingAnchor),
-            skepticalSegment.topAnchor.constraint(equalTo: track.topAnchor),
-            skepticalSegment.bottomAnchor.constraint(equalTo: track.bottomAnchor),
-            skepticalSegment.widthAnchor.constraint(equalTo: track.widthAnchor, multiplier: skepticalFrac)
-        ])
-
-        let legend = UIStackView()
-        legend.translatesAutoresizingMaskIntoConstraints = false
-        legend.axis = .horizontal
-        legend.distribution = .fillEqually
-        legend.spacing = 8
-        legend.addArrangedSubview(makeLegendItem(text: "Supportive \(supportive)%", color: AppTheme.Colors.tint.withAlphaComponent(0.55)))
-        legend.addArrangedSubview(makeLegendItem(text: "Neutral \(neutral)%", color: AppTheme.Colors.border))
-        legend.addArrangedSubview(makeLegendItem(text: "Skeptical \(skeptical)%", color: AppTheme.Colors.tint))
-        addSubview(legend)
-
-        NSLayoutConstraint.activate([
-            legend.topAnchor.constraint(equalTo: track.bottomAnchor, constant: 8),
-            legend.leadingAnchor.constraint(equalTo: leadingAnchor),
-            legend.trailingAnchor.constraint(equalTo: trailingAnchor),
-            legend.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
-
-    private func makeLegendItem(text: String, color: UIColor) -> UIView {
-        let stack = UIStackView()
-        stack.axis = .horizontal
-        stack.alignment = .center
-        stack.spacing = 5
-
-        let dot = UIView()
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.backgroundColor = color
-        dot.layer.cornerRadius = 4
-        dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
-        dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
-
-        let label = UILabel()
-        label.font = UIFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
-        label.textColor = AppTheme.Colors.secondaryText
-        label.text = text
-        label.adjustsFontSizeToFitWidth = true
-        label.minimumScaleFactor = 0.8
-
-        stack.addArrangedSubview(dot)
-        stack.addArrangedSubview(label)
-        return stack
-    }
-}
-
 // MARK: - Shimmer skeleton
 
 final class AISummarySkeletonView: UIView {
@@ -723,12 +548,10 @@ final class AISummarySkeletonView: UIView {
         stack.spacing = 20
 
         let tldr = makeGroup(widths: ["96%", "88%", "62%"], headerWidth: 60)
-        let sentiment = makeGroup(widths: ["100%"], headerWidth: 70, barHeight: 8, rounded: true)
-        let themes = makeThemesGroup()
+        let keyPoints = makeKeyPointsGroup()
 
         stack.addArrangedSubview(tldr)
-        stack.addArrangedSubview(sentiment)
-        stack.addArrangedSubview(themes)
+        stack.addArrangedSubview(keyPoints)
 
         addSubview(stack)
 
@@ -769,7 +592,7 @@ final class AISummarySkeletonView: UIView {
         return container
     }
 
-    private func makeThemesGroup() -> UIView {
+    private func makeKeyPointsGroup() -> UIView {
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
 
@@ -781,43 +604,31 @@ final class AISummarySkeletonView: UIView {
             header.widthAnchor.constraint(equalToConstant: 80)
         ])
 
+        let widths: [CGFloat] = [0.9, 0.74, 0.84, 0.6]
         var prevBottom = header.bottomAnchor
         var firstTop = true
-        for _ in 0..<3 {
+        for width in widths {
             let row = UIView()
             row.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(row)
 
-            let badge = makeBar(height: 22, rounded: true)
-            let titleBar = makeBar(height: 10, rounded: false)
-            let line1 = makeBar(height: 12, rounded: false)
-            let line2 = makeBar(height: 12, rounded: false)
+            let dot = makeBar(height: 6, rounded: true)
+            let line = makeBar(height: 12, rounded: false)
 
-            row.addSubview(badge)
-            row.addSubview(titleBar)
-            row.addSubview(line1)
-            row.addSubview(line2)
+            row.addSubview(dot)
+            row.addSubview(line)
 
             NSLayoutConstraint.activate([
-                badge.topAnchor.constraint(equalTo: row.topAnchor),
-                badge.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-                badge.widthAnchor.constraint(equalToConstant: 22),
+                dot.topAnchor.constraint(equalTo: row.topAnchor, constant: 4),
+                dot.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 2),
+                dot.widthAnchor.constraint(equalToConstant: 6),
 
-                titleBar.topAnchor.constraint(equalTo: row.topAnchor),
-                titleBar.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10),
-                titleBar.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: 0.5),
+                line.topAnchor.constraint(equalTo: row.topAnchor),
+                line.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 12),
+                line.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: width),
+                line.bottomAnchor.constraint(equalTo: row.bottomAnchor),
 
-                line1.topAnchor.constraint(equalTo: titleBar.bottomAnchor, constant: 6),
-                line1.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10),
-                line1.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: 0.82),
-
-                line2.topAnchor.constraint(equalTo: line1.bottomAnchor, constant: 6),
-                line2.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10),
-                line2.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: 0.66),
-
-                line2.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-
-                row.topAnchor.constraint(equalTo: prevBottom, constant: firstTop ? 12 : 10),
+                row.topAnchor.constraint(equalTo: prevBottom, constant: firstTop ? 14 : 12),
                 row.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 row.trailingAnchor.constraint(equalTo: container.trailingAnchor)
             ])
