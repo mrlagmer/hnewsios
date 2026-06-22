@@ -48,9 +48,7 @@ final class StoryFeedViewController: UIViewController {
     private var activeCommentsViewController: CommentsViewController?
     private var lastUpdatedAt = Date()
     private var commentsOpen = false
-    
-    private var shouldRestoreScrollPosition = false
-    private var savedScrollPosition: CGFloat = 0
+
     private var lastScrollOffset: CGFloat = 0
     private var maximumObservedPullDistance: CGFloat = 0
     private var isTopBarHidden = false
@@ -75,13 +73,6 @@ final class StoryFeedViewController: UIViewController {
         setTopBarHidden(false, animated: false)
 
         Task {
-            let savedScroll = await CacheManager.shared.getScrollPosition()
-
-            if let savedScroll, savedScroll > 0 {
-                self.shouldRestoreScrollPosition = true
-                self.savedScrollPosition = savedScroll
-            }
-
             await viewModel.loadInitialStories()
         }
     }
@@ -277,10 +268,11 @@ final class StoryFeedViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] stories in
                 guard let self = self else { return }
-                self.storyIDs = stories.map { $0.id }
                 self.storiesById = Dictionary(uniqueKeysWithValues: stories.map { ($0.id, $0) })
                 if self.currentTab == .top {
-                    self.applyStoriesSnapshot(stories, animated: self.hasAppliedInitialSnapshot)
+                    self.applyStoriesSnapshot(stories)
+                } else {
+                    self.storyIDs = stories.map { $0.id }
                 }
             }
             .store(in: &cancellables)
@@ -761,27 +753,47 @@ final class StoryFeedViewController: UIViewController {
         startTimestampTimer()
     }
 
-    private func applyStoriesSnapshot(_ stories: [Story], animated _: Bool) {
+    private func applyStoriesSnapshot(_ stories: [Story]) {
         // Cache loads can arrive before the first layout pass, leaving the
         // collection view with zero bounds. Force layout now so cells get a
         // real width when preferredLayoutAttributesFitting is called.
         if collectionView.bounds.width == 0 {
             view.layoutIfNeeded()
         }
-        collectionView.reloadData()
+
+        let previousIDs = storyIDs
+        let newIDs = stories.map { $0.id }
+        storyIDs = newIDs
+
         lastUpdatedAt = viewModel.lastFetchedAt
         updateTopBarTimestamp()
         startTimestampTimer()
 
-        if self.shouldRestoreScrollPosition && self.savedScrollPosition > 0 {
-            DispatchQueue.main.async {
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: self.savedScrollPosition), animated: false)
-                self.shouldRestoreScrollPosition = false
+        // Pagination only appends rows. A full `reloadData()` would discard the
+        // measured heights of every self-sizing cell and re-estimate them,
+        // which shifts content already on screen and makes the feed jump while
+        // the user is scrolling. When the update is a pure append we insert just
+        // the new rows so existing cells — and the scroll position — are left
+        // untouched. Anything else (refresh, reorder) falls back to reloadData.
+        let isAppend = hasAppliedInitialSnapshot
+            && newIDs.count > previousIDs.count
+            && Array(newIDs.prefix(previousIDs.count)) == previousIDs
+
+        if isAppend {
+            let inserted = (previousIDs.count..<newIDs.count).map {
+                IndexPath(item: $0, section: 0)
             }
+            UIView.performWithoutAnimation {
+                collectionView.performBatchUpdates {
+                    collectionView.insertItems(at: inserted)
+                }
+            }
+        } else {
+            collectionView.reloadData()
         }
 
-        self.updateLoadingState(isLoading: self.viewModel.isLoading, hasStories: !stories.isEmpty)
-        self.hasAppliedInitialSnapshot = true
+        updateLoadingState(isLoading: viewModel.isLoading, hasStories: !stories.isEmpty)
+        hasAppliedInitialSnapshot = true
     }
 
     // MARK: - Actions
@@ -1022,14 +1034,40 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
         // fails it collapses the slot and asks us to re-measure just that item
         // so the card shrinks instead of leaving a gap. We invalidate only the
         // one item (not the whole layout, and not via `performBatchUpdates`,
-        // which drops the boundary supplementary footer). The failure is cached,
-        // so this fires at most once per image URL — never a per-scroll storm.
+        // which drops the boundary supplementary footer).
+        //
+        // Image loads finish asynchronously, often in network bursts while the
+        // user is mid-scroll. Collapsing a card that sits above the fold pulls
+        // everything below it — including the content on screen — upward, which
+        // reads as the feed "suddenly jumping down several stories." We measure
+        // the height the collapse removes and subtract it from the content
+        // offset so the visible content stays exactly where it was.
         cell.onImageDidHide = { [weak self, weak cell] in
             guard let self, let cell,
                   let indexPath = self.collectionView.indexPath(for: cell) else { return }
+
+            let cv: UICollectionView = self.collectionView
+            let oldAttributes = cv.layoutAttributesForItem(at: indexPath)
+            let oldHeight = oldAttributes?.frame.height ?? cell.frame.height
+            let cardTop = oldAttributes?.frame.minY ?? cell.frame.minY
+            let visibleTop = cv.contentOffset.y + cv.adjustedContentInset.top
+
             let context = UICollectionViewLayoutInvalidationContext()
             context.invalidateItems(at: [indexPath])
-            self.collectionView.collectionViewLayout.invalidateLayout(with: context)
+            cv.collectionViewLayout.invalidateLayout(with: context)
+            cv.layoutIfNeeded()
+
+            let newHeight = cv.layoutAttributesForItem(at: indexPath)?.frame.height ?? cell.frame.height
+            let delta = newHeight - oldHeight
+
+            // Only compensate when the collapsing card starts above the fold;
+            // a card collapsing fully on screen should let the content below it
+            // close the gap normally.
+            if delta != 0, cardTop < visibleTop {
+                var offset = cv.contentOffset
+                offset.y = max(-cv.adjustedContentInset.top, offset.y + delta)
+                cv.setContentOffset(offset, animated: false)
+            }
         }
 
         return cell
@@ -1048,12 +1086,6 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
         }
 
         updateTopBarVisibility(for: scrollView)
-
-        // Persist scroll position for the Top feed only — the New feed is
-        // ephemeral and restored fresh each launch.
-        if currentTab == .top {
-            Task { await CacheManager.shared.saveScrollPosition(scrollView.contentOffset.y) }
-        }
 
         lastScrollOffset = normalizedOffset
     }

@@ -217,22 +217,8 @@ actor CacheManager {
     
     // MARK: - App State Persistence Methods
     
-    /// Saves scroll position to UserDefaults
-    func saveScrollPosition(_ position: CGFloat) async {
-        userDefaults.set(Double(position), forKey: scrollPositionKey)
-    }
-    
-    /// Retrieves scroll position from UserDefaults
-    func getScrollPosition() async -> CGFloat? {
-        guard userDefaults.object(forKey: scrollPositionKey) != nil else {
-            return nil
-        }
-
-        let value = userDefaults.double(forKey: scrollPositionKey)
-        return CGFloat(value)
-    }
-
-    /// Clears the saved scroll position
+    /// Clears any scroll position persisted by older builds. The app no longer
+    /// restores scroll position on launch, so this only cleans up stale state.
     func clearScrollPosition() async {
         userDefaults.removeObject(forKey: scrollPositionKey)
     }
