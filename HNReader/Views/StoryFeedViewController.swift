@@ -775,7 +775,19 @@ final class StoryFeedViewController: UIViewController {
         // the user is scrolling. When the update is a pure append we insert just
         // the new rows so existing cells — and the scroll position — are left
         // untouched. Anything else (refresh, reorder) falls back to reloadData.
+        // The insert indices must be computed against the item count the
+        // collection view itself currently knows about, not `previousIDs`:
+        // when two snapshots arrive in the same main-queue drain (e.g. the
+        // initial empty value followed by the cache restore at launch), the
+        // reloadData from the first hasn't been flushed by a layout pass yet,
+        // and inserting rows on top of a pending reload trips UIKit's
+        // batch-update assertion. Querying numberOfItems(inSection:) forces
+        // any pending reload to resolve; if the resulting count doesn't match
+        // the state we diffed against, fall back to reloadData.
+        let onScreenCount = collectionView.numberOfItems(inSection: 0)
         let isAppend = hasAppliedInitialSnapshot
+            && !previousIDs.isEmpty
+            && onScreenCount == previousIDs.count
             && newIDs.count > previousIDs.count
             && Array(newIDs.prefix(previousIDs.count)) == previousIDs
 
