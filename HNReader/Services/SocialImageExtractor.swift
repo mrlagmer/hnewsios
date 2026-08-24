@@ -13,7 +13,16 @@ actor SocialImageExtractor {
     
     // MARK: - Configuration
     private let session: URLSession
-    
+
+    /// In-memory cache of extraction results keyed by article URL. Extraction
+    /// downloads the whole article page, so repeating it on every refresh is
+    /// the most expensive part of hydrating the feed. Misses (nil) are cached
+    /// too so unreachable pages aren't retried on each refresh.
+    private var resultCache: [String: URL?] = [:]
+    /// Tasks in flight, so concurrent requests for the same article coalesce
+    /// into one download instead of racing duplicates.
+    private var inFlight: [String: Task<URL?, Never>] = [:]
+
     // MARK: - Initialization
     private init() {
         let config = URLSessionConfiguration.default
@@ -21,24 +30,40 @@ actor SocialImageExtractor {
         config.timeoutIntervalForResource = 10
         self.session = URLSession(configuration: config)
     }
-    
+
     // MARK: - Public Methods
-    
+
     /// Extracts a social image URL from a given URL using multiple fallback strategies
     /// - Parameter url: The URL string to extract social image from
     /// - Returns: URL of the social image, or nil if no image could be extracted
     func extractSocialImage(from url: String) async -> URL? {
-        guard let urlObj = URL(string: url) else { return nil }
-        
-        do {
-            let (data, _) = try await session.data(from: urlObj)
-            guard let html = String(data: data, encoding: .utf8) else { return nil }
-            
-            return parseHTML(html, baseURL: url)
-        } catch {
-            // On network error, try favicon fallback
-            return resolveFavicon(for: url)
+        if let cached = resultCache[url] {
+            return cached
         }
+
+        if let task = inFlight[url] {
+            return await task.value
+        }
+
+        let task = Task { [session] () -> URL? in
+            guard let urlObj = URL(string: url) else { return nil }
+
+            do {
+                let (data, _) = try await session.data(from: urlObj)
+                guard let html = String(data: data, encoding: .utf8) else { return nil }
+
+                return self.parseHTML(html, baseURL: url)
+            } catch {
+                // On network error, try favicon fallback
+                return self.resolveFavicon(for: url)
+            }
+        }
+
+        inFlight[url] = task
+        let result = await task.value
+        inFlight[url] = nil
+        resultCache[url] = result
+        return result
     }
     
     // MARK: - Private Methods

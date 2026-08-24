@@ -196,12 +196,24 @@ class StoryFeedViewModel: ObservableObject {
 
         let pageStoryIDs = Array(newStoryIDs[startIndex..<endIndex])
 
-        var pageStories: [Story] = []
-        for storyID in pageStoryIDs {
-            if var story = try? await api.fetchStory(id: storyID) {
-                story.isNew = !baselineNewIDs.contains(storyID)
-                pageStories.append(story)
+        // Fetch the whole page in parallel, preserving recency order.
+        let baseline = baselineNewIDs
+        let pageStories: [Story] = await withTaskGroup(of: (Int, Story?).self) { group in
+            for (index, storyID) in pageStoryIDs.enumerated() {
+                group.addTask { [api] in
+                    var story = try? await api.fetchStory(id: storyID)
+                    story?.isNew = !baseline.contains(storyID)
+                    return (index, story)
+                }
             }
+
+            var indexed: [(Int, Story)] = []
+            for await (index, story) in group {
+                if let story {
+                    indexed.append((index, story))
+                }
+            }
+            return indexed.sorted { $0.0 < $1.0 }.map(\.1)
         }
 
         newStories.append(contentsOf: pageStories)
@@ -261,29 +273,64 @@ class StoryFeedViewModel: ObservableObject {
         var completedUnits = 0
         var successfulUnits = 0
 
-        for story in stories {
-            do {
-                let comments = try await api.fetchComments(ids: story.kids ?? [], depth: 0)
-                try await cache.saveStoryComments(storyId: story.id, comments: comments)
-                successfulUnits += 1
-            } catch {
-                print("❌ Error caching comments for story \(story.id): \(error)")
+        // Cache comments for several stories at a time. Each story's comment
+        // tree is itself fetched in parallel by HackerNewsAPI, so a small
+        // window here saturates the connection limit without flooding it.
+        await withTaskGroup(of: Bool.self) { group in
+            var pending = stories.makeIterator()
+            let window = 5
+
+            func startNext(_ group: inout TaskGroup<Bool>) {
+                guard let story = pending.next() else { return }
+                group.addTask { [api, cache, story] in
+                    do {
+                        let comments = try await api.fetchComments(ids: story.kids ?? [], depth: 0)
+                        try await cache.saveStoryComments(storyId: story.id, comments: comments)
+                        return true
+                    } catch {
+                        print("❌ Error caching comments for story \(story.id): \(error)")
+                        return false
+                    }
+                }
             }
 
-            completedUnits += 1
-            downloadProgress = (completedUnits, totalUnits)
+            for _ in 0..<window { startNext(&group) }
+
+            for await didSucceed in group {
+                if didSucceed { successfulUnits += 1 }
+                completedUnits += 1
+                downloadProgress = (completedUnits, totalUnits)
+                startNext(&group)
+            }
         }
 
-        for url in articleURLs {
-            let didPreload = await preloader.preloadForOffline(url: url)
-            if didPreload {
-                successfulUnits += 1
-            } else {
-                print("❌ Error preloading article for offline use: \(url)")
+        // Pre-render articles a few at a time. The window must stay below the
+        // preloader's pool size (5) so an in-flight WebView is never the LRU
+        // eviction victim of a newer preload.
+        await withTaskGroup(of: (String, Bool).self) { group in
+            var pending = articleURLs.makeIterator()
+            let window = 3
+
+            func startNext(_ group: inout TaskGroup<(String, Bool)>) {
+                guard let url = pending.next() else { return }
+                group.addTask { [preloader] in
+                    (url, await preloader.preloadForOffline(url: url))
+                }
             }
 
-            completedUnits += 1
-            downloadProgress = (completedUnits, totalUnits)
+            for _ in 0..<window { startNext(&group) }
+
+            for await (url, didPreload) in group {
+                if didPreload {
+                    successfulUnits += 1
+                } else {
+                    print("❌ Error preloading article for offline use: \(url)")
+                }
+
+                completedUnits += 1
+                downloadProgress = (completedUnits, totalUnits)
+                startNext(&group)
+            }
         }
 
         isDownloadingOffline = false
@@ -334,17 +381,25 @@ class StoryFeedViewModel: ObservableObject {
         guard startIndex < topStoryIDs.count else { return }
         
         let pageStoryIDs = Array(topStoryIDs[startIndex..<endIndex])
-        
-        // Fetch story metadata in parallel (limit 20 concurrent requests).
-        // Failed fetches (deleted/dead items, decode errors, transient network
-        // failures on a single ID) are dropped so they don't appear as broken
-        // placeholder cards in the feed.
-        var pageStories: [Story] = []
 
-        for storyID in pageStoryIDs {
-            if let story = await fetchStoryMetadata(id: storyID) {
-                pageStories.append(story)
+        // Fetch story metadata for the whole page in parallel, preserving feed
+        // order. Failed fetches (deleted/dead items, decode errors, transient
+        // network failures on a single ID) are dropped so they don't appear as
+        // broken placeholder cards in the feed.
+        let pageStories: [Story] = await withTaskGroup(of: (Int, Story?).self) { group in
+            for (index, storyID) in pageStoryIDs.enumerated() {
+                group.addTask {
+                    (index, await self.fetchStoryMetadata(id: storyID))
+                }
             }
+
+            var indexed: [(Int, Story)] = []
+            for await (index, story) in group {
+                if let story {
+                    indexed.append((index, story))
+                }
+            }
+            return indexed.sorted { $0.0 < $1.0 }.map(\.1)
         }
         
         // Append to stories array
@@ -374,21 +429,32 @@ class StoryFeedViewModel: ObservableObject {
         do {
             var story = try await api.fetchStory(id: id)
 
-            // Fetch top comment
-            if let topCommentId = story.kids?.first {
-                story.topComment = try? await api.fetchComment(id: topCommentId)
-            }
+            // Fetch the top comment and social image concurrently — the image
+            // requires downloading the article page, which is by far the
+            // slowest part of hydrating a story card.
+            let topCommentID = story.kids?.first
+            let articleURL = story.url
+            async let topComment = fetchTopComment(id: topCommentID)
+            async let socialImageURL = extractSocialImage(urlString: articleURL)
 
-            // Extract social image
-            if let url = story.url {
-                story.socialImageURL = await imageExtractor.extractSocialImage(from: url)
-            }
+            story.topComment = await topComment
+            story.socialImageURL = await socialImageURL
 
             return story
         } catch {
             print("❌ Error fetching story metadata for \(id): \(error)")
             return nil
         }
+    }
+
+    private func fetchTopComment(id: Int?) async -> Comment? {
+        guard let id else { return nil }
+        return try? await api.fetchComment(id: id)
+    }
+
+    private func extractSocialImage(urlString: String?) async -> URL? {
+        guard let urlString else { return nil }
+        return await imageExtractor.extractSocialImage(from: urlString)
     }
 }
 

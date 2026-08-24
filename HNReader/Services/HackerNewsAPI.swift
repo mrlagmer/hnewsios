@@ -199,14 +199,23 @@ actor HackerNewsAPI {
             allComments.append(contentsOf: comments)
         }
         
-        // Recursively fetch nested comments (kids) up to maxCommentDepth
-        var nestedComments: [Comment] = []
-        
-        for comment in allComments {
-            if let kids = comment.kids, !kids.isEmpty {
-                let childComments = try await fetchComments(ids: kids, depth: depth + 1)
-                nestedComments.append(contentsOf: childComments)
+        // Recursively fetch nested comments (kids) up to maxCommentDepth.
+        // Each parent's subtree is fetched in parallel; ordering doesn't matter
+        // here because callers rebuild the tree by grouping on `parent`.
+        let nestedComments = try await withThrowingTaskGroup(of: [Comment].self) { group in
+            for comment in allComments {
+                if let kids = comment.kids, !kids.isEmpty {
+                    group.addTask {
+                        try await self.fetchComments(ids: kids, depth: depth + 1)
+                    }
+                }
             }
+
+            var results: [Comment] = []
+            for try await childComments in group {
+                results.append(contentsOf: childComments)
+            }
+            return results
         }
         
         // Return flattened array of all comments
