@@ -32,6 +32,26 @@ struct Story: Codable, Identifiable {
         !title.isEmpty && id > 0
     }
 
+    /// The story's discussion page on news.ycombinator.com.
+    var hnItemURL: String {
+        "https://news.ycombinator.com/item?id=\(id)"
+    }
+
+    /// The URL to open for this story: the submitted link, or the HN
+    /// discussion page for text-only posts (Ask HN, some Show HN).
+    var resolvedURL: String {
+        if let url, !url.isEmpty {
+            return url
+        }
+        return hnItemURL
+    }
+
+    /// The submitter's own text, if they included any (HTML).
+    var submissionText: String? {
+        guard let text, !text.isEmpty else { return nil }
+        return text
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, title, score, descendants, url, text, by, time, kids, deleted, dead
         case topComment, socialImageURL

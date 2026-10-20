@@ -170,6 +170,7 @@ final class StoryCell: UICollectionViewCell {
     private let domainLabel = UILabel()
     private let ageLabel = UILabel()
     let titleLabel = UILabel()
+    private let submissionTextLabel = UILabel()
     let socialImageView = UIImageView()
     private let topCommentView = UIView()
     private let topCommentMetaRow = UIStackView()
@@ -228,6 +229,7 @@ final class StoryCell: UICollectionViewCell {
         let quoteTextWrapWidth = max(0, labelWrapWidth - 15)
         if abs(titleLabel.preferredMaxLayoutWidth - labelWrapWidth) > 0.5 {
             titleLabel.preferredMaxLayoutWidth = labelWrapWidth
+            submissionTextLabel.preferredMaxLayoutWidth = labelWrapWidth
             quoteTextLabel.preferredMaxLayoutWidth = quoteTextWrapWidth
         }
 
@@ -250,6 +252,8 @@ final class StoryCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         titleLabel.text = nil
+        submissionTextLabel.attributedText = nil
+        submissionTextLabel.isHidden = true
         domainLabel.text = nil
         ageLabel.text = nil
         quoteTextLabel.attributedText = nil
@@ -307,6 +311,16 @@ final class StoryCell: UICollectionViewCell {
         titleLabel.textColor = AppTheme.Colors.primaryText
         titleLabel.isUserInteractionEnabled = true
         titleLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleStoryTap)))
+
+        // Self-post body (Ask HN / Show HN text). Tapping it opens the story,
+        // same as the title, which for text-only posts is the HN item page.
+        submissionTextLabel.translatesAutoresizingMaskIntoConstraints = false
+        submissionTextLabel.numberOfLines = 4
+        submissionTextLabel.lineBreakMode = .byTruncatingTail
+        submissionTextLabel.adjustsFontForContentSizeCategory = true
+        submissionTextLabel.isHidden = true
+        submissionTextLabel.isUserInteractionEnabled = true
+        submissionTextLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleStoryTap)))
 
         socialImageContainer.translatesAutoresizingMaskIntoConstraints = false
         socialImageContainer.backgroundColor = AppTheme.Colors.surfaceAlt
@@ -490,6 +504,7 @@ final class StoryCell: UICollectionViewCell {
 
         contentStack.addArrangedSubview(metaHeaderRow)
         contentStack.addArrangedSubview(titleLabel)
+        contentStack.addArrangedSubview(submissionTextLabel)
         contentStack.addArrangedSubview(socialImageContainer)
         contentStack.addArrangedSubview(topCommentView)
         contentStack.addArrangedSubview(commentsRow)
@@ -532,6 +547,15 @@ final class StoryCell: UICollectionViewCell {
         titleLabel.text = story.title
         domainLabel.text = formattedDomain(from: story.url)
         ageLabel.text = formatTime(timestamp: story.time)
+
+        if let html = story.submissionText, let rendered = renderSubmissionText(html) {
+            submissionTextLabel.attributedText = rendered
+            submissionTextLabel.isHidden = false
+        } else {
+            submissionTextLabel.attributedText = nil
+            submissionTextLabel.isHidden = true
+        }
+
         scoreButton.configuration?.title = "\(story.score)"
         commentsButton.configuration?.title = "\(story.descendants) comments"
 
@@ -611,6 +635,25 @@ final class StoryCell: UICollectionViewCell {
             .font: AppTheme.Typography.storySummaryBody,
             .paragraphStyle: paragraph,
             .foregroundColor: AppTheme.Colors.primaryText
+        ])
+    }
+
+    private func renderSubmissionText(_ html: String) -> NSAttributedString? {
+        let decodedText = HTMLTextExtractor.plainText(from: html)
+
+        guard !decodedText.isEmpty else {
+            return nil
+        }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = AppTheme.Metrics.xSmall
+        paragraph.paragraphSpacing = AppTheme.Metrics.small
+        paragraph.lineBreakMode = .byTruncatingTail
+
+        return NSAttributedString(string: decodedText, attributes: [
+            .font: AppTheme.Typography.storySummaryBody,
+            .paragraphStyle: paragraph,
+            .foregroundColor: AppTheme.Colors.secondaryText
         ])
     }
 

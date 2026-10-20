@@ -446,6 +446,15 @@ final class CommentsViewController: UIViewController {
     }
 
     private func summaryText(for story: Story) -> String {
+        // The submitter's own text (Ask HN / Show HN) is the post itself, so it
+        // takes precedence over the top comment preview.
+        if let html = story.submissionText {
+            let text = strippedHTMLText(from: html)
+            if !text.isEmpty {
+                return text
+            }
+        }
+
         if let html = story.topComment?.text {
             let text = strippedHTMLText(from: html)
             if !text.isEmpty {

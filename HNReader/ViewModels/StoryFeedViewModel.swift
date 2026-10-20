@@ -48,7 +48,7 @@ class StoryFeedViewModel: ObservableObject {
     // MARK: - Private Properties
     private var topStoryIDs: [Int] = []
     private var currentPage: Int = 0
-    private let pageSize = 20
+    private let pageSize = 30
     private var cancellables = Set<AnyCancellable>()
 
     // New feed bookkeeping

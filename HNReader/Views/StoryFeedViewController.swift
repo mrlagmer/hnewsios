@@ -1113,8 +1113,7 @@ extension StoryFeedViewController: UIScrollViewDelegate, UICollectionViewDelegat
     }
 
     private func openStory(_ story: Story) {
-        guard let url = story.url else { return }
-        let webVC = WebViewModalViewController(url: url)
+        let webVC = WebViewModalViewController(url: story.resolvedURL)
         present(webVC, animated: true)
     }
 }
